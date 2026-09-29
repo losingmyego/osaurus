@@ -5,6 +5,7 @@ private enum ChatPickerLayout {
     static let rowHeight: CGFloat = 36
     static let rowSpacing: CGFloat = 2
     static let columnWidth: CGFloat = 240
+    static let reasoningColumnWidth: CGFloat = 200
     static let columnSpacing: CGFloat = 20
     static let padding: CGFloat = 16
 }
@@ -89,7 +90,13 @@ struct ChatModelPickerCard: View {
     private var columnWidth: CGFloat {
         guard let availableWidth = cardMetrics?.availableSize.width else { return ChatPickerLayout.columnWidth }
         let threeColumnChrome = 2 * ChatPickerLayout.padding + 2 * ChatPickerLayout.columnSpacing
-        return min(ChatPickerLayout.columnWidth, max(1, (availableWidth - threeColumnChrome) / 3))
+        let fullColumnsWidth = 2 * ChatPickerLayout.columnWidth + ChatPickerLayout.reasoningColumnWidth
+        let scale = min(1, max(0, availableWidth - threeColumnChrome) / fullColumnsWidth)
+        return max(1, ChatPickerLayout.columnWidth * scale)
+    }
+
+    private var reasoningColumnWidth: CGFloat {
+        columnWidth * ChatPickerLayout.reasoningColumnWidth / ChatPickerLayout.columnWidth
     }
 
     private var twoColumnWidth: CGFloat {
@@ -98,7 +105,7 @@ struct ChatModelPickerCard: View {
 
     private var reasoningIsRevealed: Bool {
         currentReasoning != nil
-            && visibleReasoningWidth >= columnWidth + ChatPickerLayout.columnSpacing - 0.5
+            && visibleReasoningWidth >= reasoningColumnWidth + ChatPickerLayout.columnSpacing - 0.5
     }
 
     private var currentReasoning: ChatPickerReasoningSnapshot? {
@@ -126,12 +133,13 @@ struct ChatModelPickerCard: View {
             ?? providers.first { $0.isActive }
         let control = provider?.models.contains { $0.id == selectedModel } == true ? optionsControl : nil
         return cardSize(provider: provider, providerCount: providers.count, control: control,
-                        columnWidth: ChatPickerLayout.columnWidth, showingOptions: false)
+                        columnWidth: ChatPickerLayout.columnWidth,
+                        reasoningColumnWidth: ChatPickerLayout.reasoningColumnWidth, showingOptions: false)
     }
 
     private var preferredSize: CGSize {
         Self.cardSize(provider: provider, providerCount: providers.count, control: control,
-                      columnWidth: columnWidth, showingOptions: showingOptions)
+                      columnWidth: columnWidth, reasoningColumnWidth: reasoningColumnWidth, showingOptions: showingOptions)
     }
 
     private static func cardSize(
@@ -139,6 +147,7 @@ struct ChatModelPickerCard: View {
         providerCount: Int,
         control: ModelPickerOptionsControl?,
         columnWidth: CGFloat,
+        reasoningColumnWidth: CGFloat,
         showingOptions: Bool
     ) -> CGSize {
         let twoColumnWidth = 2 * columnWidth + ChatPickerLayout.columnSpacing + 2 * ChatPickerLayout.padding
@@ -156,7 +165,7 @@ struct ChatModelPickerCard: View {
         let searchHeight = (provider?.models.count ?? 0) > 10 ? 38 : 0
         let rowsHeight = CGFloat(count) * ChatPickerLayout.rowHeight
             + CGFloat(max(0, count - 1)) * ChatPickerLayout.rowSpacing
-        return CGSize(width: twoColumnWidth + (reasoning == nil ? 0 : columnWidth + ChatPickerLayout.columnSpacing),
+        return CGSize(width: twoColumnWidth + (reasoning == nil ? 0 : reasoningColumnWidth + ChatPickerLayout.columnSpacing),
                       height: min(480, max(236, 68 + rowsHeight + CGFloat(modelFooter + searchHeight))))
     }
 
@@ -217,7 +226,7 @@ struct ChatModelPickerCard: View {
 
     private var columns: some View {
         GeometryReader { geometry in
-            let slotWidth = min(columnWidth + ChatPickerLayout.columnSpacing,
+            let slotWidth = min(reasoningColumnWidth + ChatPickerLayout.columnSpacing,
                                 max(0, geometry.size.width - twoColumnWidth))
             HStack(alignment: .top, spacing: 0) {
                 providerColumn.frame(width: columnWidth)
@@ -243,9 +252,9 @@ struct ChatModelPickerCard: View {
                     Color.clear.accessibilityHidden(true)
                 }
             }
-            .frame(width: columnWidth)
+            .frame(width: reasoningColumnWidth)
         }
-        .frame(width: columnWidth + ChatPickerLayout.columnSpacing, alignment: .leading)
+        .frame(width: reasoningColumnWidth + ChatPickerLayout.columnSpacing, alignment: .leading)
         .frame(width: width, alignment: .leading)
         .clipped()
         .contentShape(Rectangle())
