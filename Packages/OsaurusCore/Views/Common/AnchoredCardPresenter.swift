@@ -123,7 +123,6 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.locale) private var locale
 
@@ -151,7 +150,6 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
                 // Forward visual values rather than the parent's focus bridge.
                 .environment(\.theme, theme)
                 .environment(\.colorScheme, colorScheme)
-                .environment(\.colorSchemeContrast, colorSchemeContrast)
                 .environment(\.layoutDirection, layoutDirection)
                 .environment(\.locale, locale)
                 .tint(theme.accentColor))
