@@ -330,6 +330,16 @@ public enum SettingsSearchIndex {
             keywords: ["sleep", "awake", "reachable", "phone", "remote", "idle sleep"]
         ),
         .init(
+            id: "settings.connect.continuePhoneChats",
+            tab: .connect,
+            section: "On This Mac",
+            title: "Continue Phone Chats on This Mac",
+            keywords: [
+                "handoff", "continue", "resume", "iphone", "phone", "bring to front", "focus", "come back",
+                "return", "unlock",
+            ]
+        ),
+        .init(
             id: "settings.chat.compactionModel",
             tab: .chat,
             section: "Chat",
@@ -1248,6 +1258,20 @@ public enum SettingsSearchIndex {
                 "starter agents", "coder", "researcher", "writer", "create agents",
                 "no agents yet", "first agents", "quick start",
             ]
+        ),
+        .init(
+            id: "settings.orchestrator.delegation.addAllAgents",
+            tab: .orchestrator,
+            section: "Subagents",
+            title: "Add all agents",
+            keywords: [
+                "add all agents", "empty pool", "spawn pool empty", "no spawn_agent",
+                "cannot delegate", "orchestrator cannot delegate", "re-add agents",
+                "restore delegation", "agents not in list",
+            ],
+            disambiguation:
+                "Shown only while the Orchestrator's allowed list is empty but agents exist; puts every existing agent back in the list so spawn_agent returns.",
+            declarativeSection: "delegation"
         ),
         .init(
             id: "settings.orchestrator.delegation.permission",
