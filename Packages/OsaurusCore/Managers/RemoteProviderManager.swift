@@ -1024,12 +1024,14 @@ public final class RemoteProviderManager: ObservableObject {
 
     /// Re-query `/models` for one connected provider without tearing down its
     /// service, flipping `isConnecting`, or refreshing OAuth.
-    public func refetchModels(providerId: UUID) async {
+    /// Returns true after a successful fetch, including an unchanged catalog.
+    @discardableResult
+    public func refetchModels(providerId: UUID) async -> Bool {
         guard let provider = configuration.provider(id: providerId),
             provider.enabled,
             var state = providerStates[providerId],
             state.isConnected
-        else { return }
+        else { return false }
 
         let discovered: [String]
         var mediaCatalogChanged = false
@@ -1065,13 +1067,13 @@ public final class RemoteProviderManager: ObservableObject {
                 customProviderContextLengths[provider.id] = discovery.contextLengths
             }
         } catch {
-            return
+            return false
         }
 
         let merged = provider.mergedModelIds(discovered: discovered)
         lastModelRefetchAt[providerId] = Date()
         guard mediaCatalogChanged || contextLengthsChanged || merged != state.discoveredModels
-        else { return }
+        else { return true }
 
         state.discoveredModels = merged
         providerStates[providerId] = state
@@ -1079,6 +1081,7 @@ public final class RemoteProviderManager: ObservableObject {
             await service.updateModels(merged)
         }
         notifyModelsChanged()
+        return true
     }
 
     /// Refresh every enabled provider's model list, coalesced and throttled.

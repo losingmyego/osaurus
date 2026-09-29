@@ -449,6 +449,9 @@ struct FloatingInputCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var isDragOver = false
     @State private var showModelPicker = false
+    @State private var modelPickerCardSize = CGSize(width: 532, height: 280)
+    @State private var showCloudModelBrowser = false
+    @ObservedObject private var chatModelFavorites = FavoriteModelsStore.shared
     @State private var showImageSizePicker = false
     /// Width available to the toggle-chip region (the space between the model
     /// chip and the meta cluster). Measured cheaply via `onGeometryChange` and
@@ -3176,14 +3179,33 @@ extension FloatingInputCard {
                 warmupController: warmupController
             )
         )
-        .popover(isPresented: $showModelPicker, arrowEdge: .top) {
-            ModelPickerView(
-                options: cachedPickerItems,
+        .anchoredCard(isPresented: $showModelPicker, size: modelPickerCardSize, accessibilityLabel: L("Model picker")) {
+            ChatModelPickerCard(
+                providers: chatPickerProviders,
                 selectedModel: $selectedModel,
-                agentId: agentId,
                 optionsControl: modelPickerOptionsControl,
-                onDismiss: dismissModelPicker
+                onExploreLocal: {
+                    dismissModelPicker()
+                    AppDelegate.shared?.showManagementWindow(initialTab: .models)
+                },
+                onExploreCloud: {
+                    dismissModelPicker()
+                    DispatchQueue.main.async { showCloudModelBrowser = true }
+                },
+                onSizeChange: { modelPickerCardSize = $0 }
             )
+        }
+        .sheet(isPresented: $showCloudModelBrowser) {
+            CloudModelBrowserDialog(
+                options: cloudPickerItems,
+                selectedModel: $selectedModel,
+                onDismiss: { showCloudModelBrowser = false },
+                onManageCloud: {
+                    showCloudModelBrowser = false
+                    AppDelegate.shared?.showManagementWindow(initialTab: .credits)
+                }
+            )
+            .environment(\.theme, theme)
         }
         .onChange(of: showModelPicker) { _, isShowing in
             if isShowing {
@@ -3193,6 +3215,13 @@ extension FloatingInputCard {
                 // view; a stale set would hide the depth row on a capable
                 // model, which reads as "this model has no MTP".
                 refreshNativeMTPState()
+                Task {
+                    await RemoteProviderManager.shared.refreshConnectedProviders()
+                    await ModelPickerItemCache.shared.buildModelPickerItems()
+                    _ = await Task.detached(priority: .utility) {
+                        ExternalModelLocator.pruneMissing()
+                    }.value
+                }
             }
         }
         .onChange(of: pickerItems) { _, newItems in
@@ -3201,6 +3230,22 @@ extension FloatingInputCard {
                 cachedPickerItems = newItems
             }
         }
+    }
+
+    private var cloudPickerItems: [ModelPickerItem] {
+        pickerItems.filter {
+            if case .remote(_, let providerID) = $0.source {
+                return providerID == RemoteProviderManager.osaurusRouterProviderId
+            }
+            return false
+        }
+    }
+
+    private var chatPickerProviders: [ChatModelPickerProvider] {
+        let shortlist = Set(cachedPickerItems.filter {
+            chatModelFavorites.isFavorite($0.favoriteKey) || $0.id == selectedModel
+        }.map(\.id))
+        return ChatModelPickerProvider.groups(from: cachedPickerItems, cloudModelIDs: shortlist)
     }
 
     /// Inline "Model Options" section for the model popover: the semantic

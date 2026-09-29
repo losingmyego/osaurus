@@ -1,0 +1,495 @@
+import AppKit
+import SwiftUI
+
+/// The chat-only, column-based picker. Selection and option persistence remain
+/// owned by FloatingInputCard; browsing another provider never changes a model.
+struct ChatModelPickerCard: View {
+    let providers: [ChatModelPickerProvider]
+    @Binding var selectedModel: String?
+    let optionsControl: ModelPickerOptionsControl?
+    let onExploreLocal: () -> Void
+    let onExploreCloud: () -> Void
+    let onSizeChange: (CGSize) -> Void
+
+    @Environment(\.theme) private var theme
+    @Environment(\.layoutDirection) private var layoutDirection
+    @State private var browsedProviderID: String?
+    @State private var search = ""
+    @State private var showingOptions = false
+    @ObservedObject var favorites = FavoriteModelsStore.shared
+    @FocusState private var focus: String?
+    @State private var keyboardNavigation = false
+
+    private var provider: ChatModelPickerProvider? {
+        providers.first { $0.id == browsedProviderID }
+            ?? providers.first { $0.models.contains { $0.id == selectedModel } }
+            ?? providers.first { $0.isActive }
+    }
+
+    private var models: [ModelPickerItem] {
+        guard let provider else { return [] }
+        return provider.models.filter {
+            search.isEmpty || $0.displayName.localizedStandardContains(search)
+                || $0.id.localizedStandardContains(search)
+        }
+    }
+
+    private var control: ModelPickerOptionsControl? {
+        guard provider?.models.contains(where: { $0.id == selectedModel }) == true else { return nil }
+        return optionsControl
+    }
+
+    private var reasoning: ModelOptionDefinition? {
+        guard let option = control?.options.first(where: { $0.id == "reasoningEffort" }),
+            case .segmented(let segments) = option.kind, segments.count > 1
+        else { return nil }
+        return option
+    }
+
+    private var hasAdditionalOptions: Bool {
+        guard let control else { return false }
+        return control.thinking != nil || control.options.contains { $0.id != reasoning?.id }
+    }
+
+    private var preferredSize: CGSize {
+        if showingOptions { return CGSize(width: 532, height: 380) }
+        let reasoningCount: Int
+        if let reasoning, case .segmented(let segments) = reasoning.kind {
+            reasoningCount = segments.count
+        } else {
+            reasoningCount = 0
+        }
+        let count = min(8, max(providers.count, max(provider?.models.count ?? 0, reasoningCount)))
+        let modelFooter = (provider?.isLocal == true || provider?.isOsaurusCloud == true ? 44 : 0)
+            + (hasAdditionalOptions ? 44 : 0)
+        let reasoningFooter = reasoning.flatMap { control?.values[$0.id] } == nil ? 0 : 44
+        let footer = max(modelFooter, reasoningFooter)
+        let searchHeight = (provider?.models.count ?? 0) > 10 ? 38 : 0
+        return CGSize(width: reasoning == nil ? 532 : 792,
+                      height: CGFloat(min(480, max(236, 60 + count * 44 + footer + searchHeight))))
+    }
+
+    var body: some View {
+        Group {
+            if showingOptions, let optionsControl {
+                ChatModelOptionsPanel(control: optionsControl) {
+                    showingOptions = false
+                    DispatchQueue.main.async { focus = "options" }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 20) {
+                    providerColumn
+                    modelColumn
+                    if let reasoning, let control {
+                        reasoningColumn(reasoning, control: control)
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(theme.cardBorder, lineWidth: 1)
+        }
+        .font(theme.font(size: CGFloat(theme.bodySize)))
+        .foregroundStyle(theme.primaryText)
+        .onAppear {
+            keyboardNavigation = NSApp.currentEvent?.type == .keyDown
+            reportSize()
+            focus = provider.map { "provider:\($0.id)" } ?? providers.first.map { "provider:\($0.id)" }
+        }
+        .onChange(of: preferredSize) { _, _ in reportSize() }
+        .onChange(of: providers) { _, updated in
+            if !updated.contains(where: { $0.id == browsedProviderID && $0.isActive }) {
+                browsedProviderID = nil
+            }
+        }
+        .onChange(of: optionsControl == nil) { _, missing in
+            if missing { showingOptions = false }
+        }
+        .onKeyPress(phases: .down) { _ in
+            keyboardNavigation = true
+            return .ignored
+        }
+        .onMoveCommand { direction in
+            keyboardNavigation = true
+            moveFocus(direction)
+        }
+        .accessibilityIdentifier("chat-model-picker")
+    }
+
+    private func reportSize() {
+        let size = preferredSize
+        DispatchQueue.main.async { onSizeChange(size) }
+    }
+
+    private func heading(_ title: String) -> some View {
+        Text(title)
+            .font(theme.font(size: CGFloat(theme.bodySize) + 2))
+            .foregroundStyle(theme.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var providerColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            heading(L("Provider"))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(providers) { item in
+                            let key = "provider:\(item.id)"
+                            ChatPickerRow(
+                                title: item.title,
+                                selected: item.id == provider?.id,
+                                muted: !item.isActive,
+                                explore: !item.isActive,
+                                focused: keyboardNavigation && focus == key,
+                                icon: { providerIcon(item) },
+                                action: { chooseProvider(item) }
+                            )
+                            .focused($focus, equals: key)
+                            .id(key)
+                            .accessibilityLabel(item.isActive ? item.title : "\(L("Explore")) \(item.title)")
+                        }
+                    }
+                }
+                .scrollIndicators(.automatic)
+                .onChange(of: focus) { _, key in
+                    if let key, key.hasPrefix("provider:") { proxy.scrollTo(key) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var modelColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            heading(L("Model"))
+            if (provider?.models.count ?? 0) > 10 {
+                TextField(L("Find a model"), text: $search)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(L("Find a model"))
+                    .focused($focus, equals: "search")
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(models) { model in
+                            let key = "model:\(model.id)"
+                            HStack(spacing: 0) {
+                                ChatPickerRow(title: model.displayName, selected: model.id == selectedModel,
+                                              focused: keyboardNavigation && focus == key, icon: { EmptyView() }) {
+                                    selectedModel = model.id
+                                }
+                                .focused($focus, equals: key)
+                                if provider?.isOsaurusCloud == true {
+                                    let saved = favorites.isFavorite(model.favoriteKey)
+                                    Button {
+                                        favorites.toggle(model.favoriteKey)
+                                    } label: {
+                                        Image(systemName: saved ? "star.fill" : "star")
+                                            .font(.system(size: 13))
+                                            .frame(width: 28, height: 36)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .focusable()
+                                    .focusEffectDisabled()
+                                    .focused($focus, equals: "favorite:\(model.id)")
+                                    .overlay {
+                                        if keyboardNavigation && focus == "favorite:\(model.id)" {
+                                            VStack {
+                                                Spacer()
+                                                Rectangle().fill(theme.secondaryText).frame(height: 1).padding(.horizontal, 6)
+                                            }
+                                        }
+                                    }
+                                    .onKeyPress(.return) { favorites.toggle(model.favoriteKey); return .handled }
+                                    .accessibilityLabel("\(saved ? L("Remove from favorites") : L("Add to favorites")): \(model.displayName)")
+                                    .help(saved ? L("Remove from favorites") : L("Add to favorites"))
+                                }
+                            }
+                            .id(key)
+                            .help(model.displayName)
+                        }
+                        if models.isEmpty {
+                            Text(search.isEmpty ? L("Choose a provider to browse models.") : L("No matching models. Try another name."))
+                                .foregroundStyle(theme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 12)
+                        }
+                        if let provider, provider.isLocal || provider.isOsaurusCloud {
+                            footerButton(L("More models"), key: "more", icon: "arrow.forward") {
+                                provider.isLocal ? onExploreLocal() : onExploreCloud()
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel(provider.isLocal ? L("More local models") : L("More Osaurus Cloud models"))
+                            .id("more")
+                        }
+                    }
+                }
+                .onAppear {
+                    if let selectedModel { proxy.scrollTo("model:\(selectedModel)", anchor: .center) }
+                }
+                .onChange(of: focus) { _, key in
+                    if let key {
+                        if key.hasPrefix("model:") || key == "more" { proxy.scrollTo(key) }
+                        if key.hasPrefix("favorite:") { proxy.scrollTo("model:" + key.dropFirst(9)) }
+                    }
+                }
+            }
+            if hasAdditionalOptions {
+                footerButton(L("Model options"), key: "options", icon: "slider.horizontal.3") { showingOptions = true }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func reasoningColumn(_ option: ModelOptionDefinition, control: ModelPickerOptionsControl) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            heading(L("Reasoning"))
+            if case .segmented(let segments) = option.kind {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(segments) { segment in
+                                let key = "reasoning:\(segment.id)"
+                                ChatPickerRow(title: segment.label,
+                                              selected: (control.values[option.id]?.stringValue ?? control.defaults[option.id]?.stringValue) == segment.id,
+                                              focused: keyboardNavigation && focus == key, icon: { EmptyView() }) {
+                                    control.onChange(option.id, .string(segment.id))
+                                }
+                                .focused($focus, equals: key)
+                                .id(key)
+                                .help(control.capabilities?.levels.first { $0.id == segment.id }?.description ?? segment.label)
+                            }
+                        }
+                    }
+                    .onChange(of: focus) { _, key in
+                        if let key, key.hasPrefix("reasoning:") { proxy.scrollTo(key) }
+                    }
+                }
+            }
+            if control.values[option.id] != nil {
+                footerButton(L("Reset to default"), key: "reset", icon: "arrow.uturn.backward") {
+                    control.onChange(option.id, nil)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func footerButton(_ title: String, key: String, icon: String, action: @escaping () -> Void) -> some View {
+        ChatPickerTextLink(title: title, icon: icon, focused: keyboardNavigation && focus == key, action: action)
+            .padding(.leading, 12)
+            .focused($focus, equals: key)
+    }
+
+    private func chooseProvider(_ item: ChatModelPickerProvider) {
+        guard item.isActive else {
+            item.isLocal ? onExploreLocal() : onExploreCloud()
+            return
+        }
+        browsedProviderID = item.id
+        search = ""
+    }
+
+    @ViewBuilder private func providerIcon(_ provider: ChatModelPickerProvider) -> some View {
+        if provider.isLocal {
+            Image(systemName: "desktopcomputer").frame(width: 16)
+        } else if provider.isOsaurusCloud {
+            Image("osaurus-logo", bundle: .module).resizable().renderingMode(.template).scaledToFit().frame(width: 16, height: 16)
+        } else {
+            let name = provider.title.lowercased()
+            if name.contains("openai") || name.contains("chatgpt") {
+                Image("provider-logo-openai", bundle: .module).resizable().scaledToFit().frame(width: 16, height: 16)
+            } else if name.contains("claude") || name.contains("anthropic") {
+                Image("provider-logo-anthropic", bundle: .module).resizable().scaledToFit().frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "network").frame(width: 16)
+            }
+        }
+    }
+
+    private var focusColumns: [[String]] {
+        var modelKeys = models.flatMap { model in
+            provider?.isOsaurusCloud == true
+                ? ["model:\(model.id)", "favorite:\(model.id)"] : ["model:\(model.id)"]
+        }
+        if provider?.isLocal == true || provider?.isOsaurusCloud == true { modelKeys.append("more") }
+        if hasAdditionalOptions { modelKeys.append("options") }
+        var columns = [providers.map { "provider:\($0.id)" }, modelKeys]
+        if let reasoning, case .segmented(let segments) = reasoning.kind {
+            var keys = segments.map { "reasoning:\($0.id)" }
+            if control?.values[reasoning.id] != nil { keys.append("reset") }
+            columns.append(keys)
+        }
+        return columns
+    }
+
+    private func moveFocus(_ direction: MoveCommandDirection) {
+        guard !showingOptions, focus != "search" else { return }
+        let columns = focusColumns
+        let column = columns.firstIndex { $0.contains(focus ?? "") } ?? 0
+        let row = columns[column].firstIndex(of: focus ?? "") ?? 0
+        let logicalDirection: MoveCommandDirection
+        if layoutDirection == .rightToLeft && direction == .left { logicalDirection = .right }
+        else if layoutDirection == .rightToLeft && direction == .right { logicalDirection = .left }
+        else { logicalDirection = direction }
+        switch logicalDirection {
+        case .up: if !columns[column].isEmpty { focus = columns[column][max(0, row - 1)] }
+        case .down: if !columns[column].isEmpty { focus = columns[column][min(columns[column].count - 1, row + 1)] }
+        case .left: focus = columns[max(0, column - 1)].first
+        case .right: focus = columns[min(columns.count - 1, column + 1)].first
+        default: break
+        }
+    }
+}
+
+/// Quiet inline links follow the last model, with the arrow beside the text.
+private struct ChatPickerTextLink: View {
+    let title: String
+    let icon: String
+    let focused: Bool
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Text(title).underline(hovered)
+                Image(systemName: icon).font(.system(size: 11)).accessibilityHidden(true)
+            }
+            .font(theme.font(size: CGFloat(theme.bodySize) - 1, weight: .regular))
+            .foregroundStyle(hovered ? theme.primaryText : theme.tertiaryText)
+            .frame(minHeight: 32, alignment: .leading)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                if focused { Rectangle().fill(theme.secondaryText).frame(height: 1) }
+            }
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+        .onKeyPress(.return) { action(); return .handled }
+    }
+}
+
+/// A native button supplies activation and accessibility; focus and hover use
+/// the same row shape, with a neutral keyboard underline distinct from selection.
+private struct ChatPickerRow<Icon: View>: View {
+    let title: String
+    let selected: Bool
+    var muted = false
+    var explore = false
+    var focused = false
+    @ViewBuilder let icon: () -> Icon
+    var trailingSymbol: String? = nil
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                icon().accessibilityHidden(true)
+                Text(title).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                if explore && (hovered || focused) {
+                    Text("Explore", bundle: .module)
+                        .font(theme.font(size: 11))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(theme.primaryBackground, in: Capsule())
+                } else if selected {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .medium))
+                        .accessibilityHidden(true)
+                } else if let trailingSymbol {
+                    Image(systemName: trailingSymbol).font(.system(size: 11)).accessibilityHidden(true)
+                }
+            }
+            .foregroundStyle(muted && !hovered && !focused ? theme.tertiaryText : theme.primaryText)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
+            .background(selected || hovered || focused ? theme.tertiaryBackground : .clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                if focused {
+                    VStack {
+                        Spacer()
+                        Rectangle().fill(theme.secondaryText).frame(height: 1).padding(.horizontal, 12)
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+        .onKeyPress(.return) { action(); return .handled }
+        .accessibilityValue(selected ? L("Selected") : "")
+        .help(title)
+    }
+}
+
+/// Less common controls stay available without adding permanent columns.
+private struct ChatModelOptionsPanel: View {
+    let control: ModelPickerOptionsControl
+    let onBack: () -> Void
+    @Environment(\.theme) private var theme
+    @FocusState private var backFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button(action: onBack) { Label(L("Back to models"), systemImage: "chevron.backward") }
+                .focused($backFocused)
+            Text("Model options", bundle: .module).font(theme.font(size: 16, weight: .medium))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    if let thinking = control.thinking {
+                        Picker(L("Thinking"), selection: Binding(
+                            get: { thinking.isExplicit ? (thinking.isEnabled ? "on" : "off") : "default" },
+                            set: { thinking.onSetEnabled($0 == "default" ? nil : $0 == "on") }
+                        )) {
+                            Text("Default", bundle: .module).tag("default")
+                            Text("On", bundle: .module).tag("on")
+                            Text("Off", bundle: .module).tag("off")
+                        }
+                    }
+                    ForEach(control.options) { option in
+                        VStack(alignment: .leading, spacing: 6) {
+                            switch option.kind {
+                            case .segmented(let segments):
+                                Picker(option.label, selection: Binding(
+                                    get: { control.values[option.id]?.stringValue ?? "__default" },
+                                    set: { control.onChange(option.id, $0 == "__default" ? nil : .string($0)) }
+                                )) {
+                                    Text("Default", bundle: .module).tag("__default")
+                                    ForEach(segments) { Text($0.label).tag($0.id) }
+                                }
+                            case .toggle:
+                                Toggle(option.label, isOn: Binding(
+                                    get: { control.effectiveToggleValue(for: option) },
+                                    set: { control.onChange(option.id, .bool($0)) }
+                                ))
+                                if control.values[option.id] != nil {
+                                    Button(L("Reset to default")) { control.onChange(option.id, nil) }
+                                }
+                            }
+                            if let help = option.help {
+                                Text(help).font(theme.font(size: 12)).foregroundStyle(theme.secondaryText)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .onAppear { backFocused = true }
+    }
+}
