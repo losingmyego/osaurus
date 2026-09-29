@@ -296,8 +296,9 @@ struct ChatModelPickerCard: View {
                     LazyVStack(spacing: ChatPickerLayout.rowSpacing) {
                         ForEach(providers) { item in
                             let key = "provider:\(item.id)"
+                            let title = item.isLocal ? L("Local") : item.title
                             ChatPickerRow(
-                                title: item.title,
+                                title: title,
                                 selected: item.id == provider?.id,
                                 muted: !item.isActive,
                                 explore: !item.isActive,
@@ -307,7 +308,7 @@ struct ChatModelPickerCard: View {
                             )
                             .focused($focus, equals: key)
                             .id(key)
-                            .accessibilityLabel(item.isActive ? item.title : "\(L("Explore")) \(item.title)")
+                            .accessibilityLabel(item.isActive ? title : "\(L("Explore")) \(title)")
                         }
                     }
                 }
