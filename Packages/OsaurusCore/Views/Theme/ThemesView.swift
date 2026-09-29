@@ -13,10 +13,12 @@ import UniformTypeIdentifiers
 struct IdentifiableTheme: Identifiable {
     let id: UUID
     let theme: CustomTheme
+    let landingAnchor: String?
 
-    init(_ theme: CustomTheme) {
+    init(_ theme: CustomTheme, landingAnchor: String? = nil) {
         self.id = theme.metadata.id
         self.theme = theme
+        self.landingAnchor = landingAnchor
     }
 }
 
@@ -122,6 +124,7 @@ func systemThemeCardMatches(filter: ThemeFilter, search: String) -> Bool {
 struct ThemesView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @ObservedObject private var managementState = ManagementStateManager.shared
+    @ObservedObject private var highlightCoordinator = SettingsHighlightCoordinator.shared
 
     /// Use computed property to always get the current theme from ThemeManager
     private var theme: ThemeProtocol { themeManager.currentTheme }
@@ -196,6 +199,7 @@ struct ThemesView: View {
         .onAppear {
             loadThemes()
             applyPendingThemeInstall()
+            routeSettingsLanding(highlightCoordinator.pending)
             withAnimation(.easeOut(duration: 0.25).delay(0.05)) {
                 hasAppeared = true
             }
@@ -203,10 +207,12 @@ struct ThemesView: View {
         .sheet(item: $editingTheme) { identifiableTheme in
             ThemeEditorView(
                 theme: identifiableTheme.theme,
+                initialLandingAnchor: identifiableTheme.landingAnchor,
                 onDismiss: {
                     editingTheme = nil
                 }
             )
+            .environment(\.settingsLandingPending, highlightCoordinator.pending)
         }
         .fileImporter(
             isPresented: $showingImporter,
@@ -248,6 +254,9 @@ struct ThemesView: View {
                     applyAfterImportById = false
                 }
             )
+        }
+        .onChange(of: highlightCoordinator.pending) { _, pending in
+            routeSettingsLanding(pending)
         }
         .onReceive(managementState.$pendingThemeInstallHash) { _ in
             applyPendingThemeInstall()
@@ -1339,11 +1348,25 @@ struct ThemesView: View {
     /// the next runloop tick. The brief detour avoids a SwiftUI glitch where
     /// presenting a new sheet while an old one is still tearing down can
     /// leave the editor hidden behind the parent.
-    private func openEditor(for theme: CustomTheme) {
+    private func openEditor(for theme: CustomTheme, landingAnchor: String? = nil) {
         editingTheme = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            editingTheme = IdentifiableTheme(theme)
+            editingTheme = IdentifiableTheme(theme, landingAnchor: landingAnchor)
         }
+    }
+
+    /// Typography controls live inside the editor, so search must open the
+    /// current theme rather than stop at the gallery. System appearance uses
+    /// its currently resolved light or dark theme.
+    private func routeSettingsLanding(_ pending: String?) {
+        guard pending == "themes.typography.smallBody" else { return }
+        guard editingTheme == nil else { return }
+        let builtIn = themeManager.installedThemes.first(where: {
+            ThemeManager.appearanceMode(forBuiltInTheme: $0) == (theme.isDark ? .dark : .light)
+        })
+        let fallback = theme.isDark ? CustomTheme.darkDefault : CustomTheme.lightDefault
+        let target: CustomTheme = themeManager.activeCustomTheme ?? builtIn ?? fallback
+        openEditor(for: target, landingAnchor: pending)
     }
 
     private func exportTheme(_ theme: CustomTheme) {

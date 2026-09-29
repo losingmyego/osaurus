@@ -1466,6 +1466,14 @@ public enum SettingsSearchIndex {
             keywords: ["theme", "appearance", "dark mode", "color", "accent"]
         ),
         .init(
+            id: "themes.typography.smallBody",
+            tab: .themes,
+            section: "Text & Fonts",
+            title: "Small body",
+            keywords: ["small body size", "small text", "font size", "compact controls", "model list", "model picker"],
+            disambiguation: "Compact controls and model lists"
+        ),
+        .init(
             id: "memory.settings",
             tab: .memory,
             title: "Memory",
