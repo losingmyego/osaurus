@@ -37,7 +37,8 @@ enum AnchoredCardPlacement {
         anchor: CGRect,
         size: CGSize,
         visibleFrame: CGRect,
-        rightToLeft: Bool = false
+        rightToLeft: Bool = false,
+        preferAbove: Bool? = nil
     ) -> CGRect {
         let inset: CGFloat = 12
         let gap: CGFloat = 8
@@ -49,7 +50,7 @@ enum AnchoredCardPlacement {
         let desiredHeight = max(1, size.height)
         let above = max(0, safe.maxY - anchor.maxY - gap)
         let below = max(0, anchor.minY - gap - safe.minY)
-        let placeAbove = above >= desiredHeight || (below < desiredHeight && above >= below)
+        let placeAbove = preferAbove ?? (above >= desiredHeight || (below < desiredHeight && above >= below))
         let height = min(desiredHeight, max(1, placeAbove ? above : below))
         let preferredX = rightToLeft ? anchor.maxX - width : anchor.minX
         let preferredY = placeAbove ? anchor.maxY + gap : anchor.minY - gap - height
@@ -59,6 +60,58 @@ enum AnchoredCardPlacement {
             width: width,
             height: height
         )
+    }
+}
+
+/// The native window and its SwiftUI content share one presentation size.
+/// Content can clip a retiring column without maintaining a second animation.
+struct AnchoredCardMetrics: Equatable {
+    var visibleSize: CGSize
+    var targetSize: CGSize
+    var availableSize: CGSize
+    var isAnimating: Bool
+}
+
+private struct AnchoredCardMetricsKey: EnvironmentKey {
+    static let defaultValue: AnchoredCardMetrics? = nil
+}
+
+extension EnvironmentValues {
+    var anchoredCardMetrics: AnchoredCardMetrics? {
+        get { self[AnchoredCardMetricsKey.self] }
+        set { self[AnchoredCardMetricsKey.self] = newValue }
+    }
+}
+
+@MainActor
+private final class AnchoredCardPresentation: ObservableObject {
+    var content: (AnchoredCardMetrics) -> AnyView
+    var metrics: AnchoredCardMetrics
+
+    init(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics) {
+        self.content = content
+        self.metrics = metrics
+    }
+
+    func update(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics) {
+        objectWillChange.send()
+        self.content = content
+        self.metrics = metrics
+    }
+}
+
+private struct AnchoredCardRoot: View {
+    @ObservedObject var presentation: AnchoredCardPresentation
+
+    var body: some View {
+        presentation.content(presentation.metrics)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transaction {
+                // The native viewport is the only animation clock. Letting
+                // SwiftUI animate layout again would lag behind the surface.
+                $0.animation = nil
+                $0.disablesAnimations = true
+            }
     }
 }
 
@@ -87,7 +140,11 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
         coordinator.requestedSize = size
         coordinator.accessibilityLabel = accessibilityLabel
         coordinator.rightToLeft = environment.layoutDirection == .rightToLeft
-        coordinator.content = AnyView(content.environment(\.self, environment))
+        coordinator.content = { metrics in
+            AnyView(content
+                .environment(\.anchoredCardMetrics, metrics)
+                .environment(\.self, environment))
+        }
         coordinator.scheduleUpdate()
     }
 
@@ -106,12 +163,19 @@ private final class AnchoredCardCoordinator {
     var requestedSize: CGSize = .zero
     var accessibilityLabel = ""
     var rightToLeft = false
-    var content = AnyView(EmptyView())
+    var content: (AnchoredCardMetrics) -> AnyView = { _ in AnyView(EmptyView()) }
 
     private weak var parent: NSWindow?
     private weak var previousResponder: NSResponder?
     private var panel: AnchoredCardPanel?
-    private var host: NSHostingView<AnyView>?
+    private var host: NSHostingView<AnchoredCardRoot>?
+    private var presentation: AnchoredCardPresentation?
+    private var resizeTransition: AnchoredCardResizeTransition?
+    private var resizeTimer: Timer?
+    private var availableSize: CGSize = .zero
+    private var lastAnchorFrame: CGRect?
+    private var prefersAbove: Bool?
+    private var suppressNextAnimation = false
     private var observers: [NSObjectProtocol] = []
     private var eventMonitor: Any?
     private var updateScheduled = false
@@ -119,7 +183,8 @@ private final class AnchoredCardCoordinator {
 
     // NSViewRepresentable updates and layout callbacks may occur during a
     // SwiftUI render. Defer panel mutations and binding writes one turn.
-    func scheduleUpdate() {
+    func scheduleUpdate(animateResize: Bool = true) {
+        if !animateResize { suppressNextAnimation = true }
         guard !updateScheduled else { return }
         updateScheduled = true
         DispatchQueue.main.async { [weak self] in
@@ -145,49 +210,111 @@ private final class AnchoredCardCoordinator {
         if let parent, parent !== window {
             tearDown(restoreFocus: false)
         }
-        let frame = presentationFrame(anchor: anchor, window: window)
+        let placement = placement(anchor: anchor, window: window)
+        let frame = placement.frame
+        availableSize = placement.availableSize
+        // A model label can change the chip's width without moving its
+        // origin. That is a selection resize, not a window move to snap.
+        let anchorMoved = lastAnchorFrame.map { $0.origin != placement.anchorFrame.origin } ?? false
+        lastAnchorFrame = placement.anchorFrame
+        prefersAbove = frame.minY >= placement.anchorFrame.maxY
+        let skipAnimation = suppressNextAnimation || anchorMoved
+        suppressNextAnimation = false
         if panel == nil {
             present(in: window, frame: frame)
         }
-        guard let panel, let host else { return }
+        guard let panel else { return }
         panel.setAccessibilityLabel(accessibilityLabel)
         panel.title = accessibilityLabel
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        host.rootView = AnyView(
-            content
-                .frame(width: frame.width, height: frame.height)
-                .transaction { if reduceMotion { $0.animation = nil } }
-        )
-        if presentedFrame != frame {
-            let changesSize = presentedFrame.size != frame.size
-            presentedFrame = frame
-            if changesSize && !reduceMotion {
-                // The content takes its final layout while the native
-                // window reveals the added column. Keep position-only
-                // updates immediate so dragging a chat never trails it.
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.15
-                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    panel.animator().setFrame(frame, display: true)
+
+        if !skipAnimation, !reduceMotion, resizeTransition?.to == frame {
+            // Provider refreshes and option edits must not restart a resize.
+            updateContent(target: frame.size, isAnimating: true)
+            return
+        }
+        if presentedFrame == frame {
+            stopResize()
+            updateContent(target: frame.size, isAnimating: false)
+            return
+        }
+        let changesSize = presentedFrame.size != frame.size
+        if changesSize && !skipAnimation && !reduceMotion {
+            // Retarget from the last frame actually drawn, including when the
+            // user reverses direction before the previous resize finishes.
+            resizeTransition = AnchoredCardResizeTransition(
+                from: presentedFrame, to: frame, startTime: CACurrentMediaTime()
+            )
+            updateContent(target: frame.size, isAnimating: true)
+            if resizeTimer == nil {
+                let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.advanceResize() }
                 }
-            } else {
-                panel.setFrame(frame, display: true)
+                resizeTimer = timer
+                RunLoop.main.add(timer, forMode: .common)
             }
+        } else {
+            stopResize()
+            applyFrame(frame, target: frame.size, isAnimating: false)
         }
     }
 
-    private func presentationFrame(anchor: NSView, window: NSWindow) -> NSRect {
+    private func advanceResize() {
+        guard let transition = resizeTransition, panel != nil else {
+            stopResize()
+            return
+        }
+        let now = CACurrentMediaTime()
+        let finished = transition.isComplete(at: now)
+            || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let frame = finished ? transition.to : transition.frame(at: now)
+        if finished { stopResize() }
+        applyFrame(frame, target: transition.to.size, isAnimating: !finished)
+    }
+
+    private func applyFrame(_ frame: CGRect, target: CGSize, isAnimating: Bool) {
+        guard let panel else { return }
+        presentedFrame = frame
+        panel.setFrame(frame, display: false)
+        updateContent(target: target, isAnimating: isAnimating)
+        host?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+    }
+
+    private func updateContent(target: CGSize, isAnimating: Bool) {
+        presentation?.update(content: content, metrics: AnchoredCardMetrics(
+            visibleSize: presentedFrame.size,
+            targetSize: target,
+            availableSize: availableSize,
+            isAnimating: isAnimating
+        ))
+    }
+
+    private func stopResize() {
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        resizeTransition = nil
+    }
+
+    private func placement(anchor: NSView, window: NSWindow) -> (frame: CGRect, anchorFrame: CGRect, availableSize: CGSize) {
         let anchorFrame = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-        // Prefer the display containing the actual control, including when
-        // its parent straddles displays with different coordinate origins.
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: anchorFrame.midX, y: anchorFrame.midY)) }
             ?? window.screen
             ?? NSScreen.main
-        return AnchoredCardPlacement.frame(
-            anchor: anchorFrame,
-            size: requestedSize,
-            visibleFrame: screen?.visibleFrame ?? window.frame,
-            rightToLeft: rightToLeft
+        let visibleFrame = screen?.visibleFrame ?? window.frame
+        let safeFrame = visibleFrame.insetBy(
+            dx: min(12, visibleFrame.width / 4), dy: min(12, visibleFrame.height / 4)
+        )
+        return (
+            AnchoredCardPlacement.frame(
+                anchor: anchorFrame,
+                size: requestedSize,
+                visibleFrame: visibleFrame,
+                rightToLeft: rightToLeft,
+                preferAbove: !suppressNextAnimation && lastAnchorFrame?.origin == anchorFrame.origin ? prefersAbove : nil
+            ),
+            anchorFrame,
+            safeFrame.size
         )
     }
 
@@ -212,11 +339,15 @@ private final class AnchoredCardCoordinator {
         panel.animationBehavior = .none
         panel.onCancel = { [weak self] in self?.dismiss(restoreFocus: true) }
 
-        let host = NSHostingView(rootView: AnyView(
-            content
-                .frame(width: frame.width, height: frame.height)
-                .transaction { $0.animation = nil }
-        ))
+        let presentation = AnchoredCardPresentation(
+            content: content,
+            metrics: AnchoredCardMetrics(
+                visibleSize: frame.size, targetSize: frame.size,
+                availableSize: availableSize, isAnimating: false
+            )
+        )
+        let host = NSHostingView(rootView: AnchoredCardRoot(presentation: presentation))
+        self.presentation = presentation
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
@@ -234,7 +365,7 @@ private final class AnchoredCardCoordinator {
         let center = NotificationCenter.default
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification] {
             observers.append(center.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleUpdate() }
+                MainActor.assumeIsolated { self?.scheduleUpdate(animateResize: false) }
             })
         }
         for name in [NSWindow.willCloseNotification, NSWindow.willMiniaturizeNotification] {
@@ -312,6 +443,10 @@ private final class AnchoredCardCoordinator {
     }
 
     func tearDown(restoreFocus: Bool) {
+        stopResize()
+        lastAnchorFrame = nil
+        prefersAbove = nil
+        suppressNextAnimation = false
         guard let panel else { return }
         let shouldRestore = restoreFocus && NSApp.isActive && belongsToCard(NSApp.keyWindow)
         observers.forEach { NotificationCenter.default.removeObserver($0) }
@@ -324,6 +459,7 @@ private final class AnchoredCardCoordinator {
         panel.contentView = nil
         self.panel = nil
         host = nil
+        presentation = nil
         if shouldRestore, let parent, parent.isVisible, !parent.isMiniaturized {
             parent.makeKey()
             if let previousResponder { parent.makeFirstResponder(previousResponder) }

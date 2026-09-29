@@ -2169,7 +2169,7 @@ extension FloatingInputCard {
                 )
                 break
             }
-            showModelPicker = true
+            openModelPicker()
         case "agent":
             NotificationCenter.default.post(
                 name: .chatToolbarOpenAgentPicker,
@@ -3061,9 +3061,21 @@ extension FloatingInputCard {
         )
     }
 
+    private func openModelPicker() {
+        guard !showModelPicker else { return }
+        cachedPickerItems = pickerItems
+        modelPickerCardSize = ChatModelPickerCard.initialSize(
+            providers: chatPickerProviders,
+            selectedModel: selectedModel,
+            optionsControl: modelPickerOptionsControl
+        )
+        showModelPicker = true
+    }
+
     private var interactiveModelSelectorChip: some View {
         SelectorChip(isActive: showModelPicker) {
-            showModelPicker.toggle()
+            if showModelPicker { dismissModelPicker() }
+            else { openModelPicker() }
         } content: {
             HStack(spacing: 6) {
                 if isSelectedModelDeprecated {
@@ -4591,7 +4603,7 @@ extension FloatingInputCard {
             .fixedSize(horizontal: false, vertical: true)
 
             Button {
-                showModelPicker = true
+                openModelPicker()
             } label: {
                 Text("Choose model", bundle: .module)
                     .font(theme.font(size: CGFloat(theme.captionSize), weight: .semibold))

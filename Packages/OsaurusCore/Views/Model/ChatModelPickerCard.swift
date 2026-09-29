@@ -3,7 +3,25 @@ import SwiftUI
 
 private enum ChatPickerLayout {
     static let rowHeight: CGFloat = 36
-    static let rowSpacing: CGFloat = 1
+    static let rowSpacing: CGFloat = 2
+    static let columnWidth: CGFloat = 240
+    static let columnSpacing: CGFloat = 20
+    static let padding: CGFloat = 16
+}
+
+/// Only presentation values survive while the outgoing column is clipped away.
+/// Actions always resolve against the currently selected model's control.
+private struct ChatPickerReasoningSnapshot: Equatable {
+    struct Row: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let help: String
+    }
+
+    let modelID: String?
+    let optionID: String
+    let rows: [Row]
+    let selectedID: String?
 }
 
 /// The chat-only, column-based picker. Selection and option persistence remain
@@ -18,12 +36,15 @@ struct ChatModelPickerCard: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.anchoredCardMetrics) private var cardMetrics
     @State private var browsedProviderID: String?
     @State private var search = ""
     @State private var showingOptions = false
     @ObservedObject var favorites = FavoriteModelsStore.shared
     @FocusState private var focus: String?
     @State private var keyboardNavigation = false
+    @State private var retainedReasoning: ChatPickerReasoningSnapshot?
+    @State private var visibleReasoningWidth: CGFloat = 0
 
     private var provider: ChatModelPickerProvider? {
         providers.first { $0.id == browsedProviderID }
@@ -44,33 +65,98 @@ struct ChatModelPickerCard: View {
         return optionsControl
     }
 
-    private var reasoning: ModelOptionDefinition? {
+    private static func reasoningOption(in control: ModelPickerOptionsControl?) -> ModelOptionDefinition? {
         guard let option = control?.options.first(where: { $0.id == "reasoningEffort" }),
             case .segmented(let segments) = option.kind, segments.count > 1
         else { return nil }
         return option
     }
 
-    private var hasAdditionalOptions: Bool {
+    private var reasoning: ModelOptionDefinition? {
+        Self.reasoningOption(in: control)
+    }
+
+    private static func hasAdditionalOptions(in control: ModelPickerOptionsControl?) -> Bool {
         guard let control else { return false }
-        return control.thinking != nil || control.options.contains { $0.id != reasoning?.id }
+        let reasoningID = reasoningOption(in: control)?.id
+        return control.thinking != nil || control.options.contains { $0.id != reasoningID }
+    }
+
+    private var hasAdditionalOptions: Bool {
+        Self.hasAdditionalOptions(in: control)
+    }
+
+    private var columnWidth: CGFloat {
+        guard let availableWidth = cardMetrics?.availableSize.width else { return ChatPickerLayout.columnWidth }
+        let threeColumnChrome = 2 * ChatPickerLayout.padding + 2 * ChatPickerLayout.columnSpacing
+        return min(ChatPickerLayout.columnWidth, max(1, (availableWidth - threeColumnChrome) / 3))
+    }
+
+    private var twoColumnWidth: CGFloat {
+        2 * columnWidth + ChatPickerLayout.columnSpacing + 2 * ChatPickerLayout.padding
+    }
+
+    private var reasoningIsRevealed: Bool {
+        currentReasoning != nil
+            && visibleReasoningWidth >= columnWidth + ChatPickerLayout.columnSpacing - 0.5
+    }
+
+    private var currentReasoning: ChatPickerReasoningSnapshot? {
+        guard let reasoning, let control, case .segmented(let segments) = reasoning.kind else { return nil }
+        return ChatPickerReasoningSnapshot(
+            modelID: selectedModel,
+            optionID: reasoning.id,
+            rows: segments.map { segment in
+                ChatPickerReasoningSnapshot.Row(
+                    id: segment.id,
+                    label: segment.label,
+                    help: control.capabilities?.levels.first { $0.id == segment.id }?.description ?? segment.label
+                )
+            },
+            selectedID: control.values[reasoning.id]?.stringValue ?? control.defaults[reasoning.id]?.stringValue
+        )
+    }
+
+    static func initialSize(
+        providers: [ChatModelPickerProvider],
+        selectedModel: String?,
+        optionsControl: ModelPickerOptionsControl?
+    ) -> CGSize {
+        let provider = providers.first { $0.models.contains { $0.id == selectedModel } }
+            ?? providers.first { $0.isActive }
+        let control = provider?.models.contains { $0.id == selectedModel } == true ? optionsControl : nil
+        return cardSize(provider: provider, providerCount: providers.count, control: control,
+                        columnWidth: ChatPickerLayout.columnWidth, showingOptions: false)
     }
 
     private var preferredSize: CGSize {
-        if showingOptions { return CGSize(width: 532, height: 380) }
+        Self.cardSize(provider: provider, providerCount: providers.count, control: control,
+                      columnWidth: columnWidth, showingOptions: showingOptions)
+    }
+
+    private static func cardSize(
+        provider: ChatModelPickerProvider?,
+        providerCount: Int,
+        control: ModelPickerOptionsControl?,
+        columnWidth: CGFloat,
+        showingOptions: Bool
+    ) -> CGSize {
+        let twoColumnWidth = 2 * columnWidth + ChatPickerLayout.columnSpacing + 2 * ChatPickerLayout.padding
+        if showingOptions { return CGSize(width: twoColumnWidth, height: 380) }
+        let reasoning = reasoningOption(in: control)
         let reasoningCount: Int
         if let reasoning, case .segmented(let segments) = reasoning.kind {
             reasoningCount = segments.count
         } else {
             reasoningCount = 0
         }
-        let count = min(8, max(providers.count, max(provider?.models.count ?? 0, reasoningCount)))
+        let count = min(8, max(providerCount, max(provider?.models.count ?? 0, reasoningCount)))
         let modelFooter = (provider?.isLocal == true || provider?.isOsaurusCloud == true ? 44 : 0)
-            + (hasAdditionalOptions ? 44 : 0)
+            + (hasAdditionalOptions(in: control) ? 44 : 0)
         let searchHeight = (provider?.models.count ?? 0) > 10 ? 38 : 0
         let rowsHeight = CGFloat(count) * ChatPickerLayout.rowHeight
             + CGFloat(max(0, count - 1)) * ChatPickerLayout.rowSpacing
-        return CGSize(width: reasoning == nil ? 532 : 792,
+        return CGSize(width: twoColumnWidth + (reasoning == nil ? 0 : columnWidth + ChatPickerLayout.columnSpacing),
                       height: min(480, max(236, 68 + rowsHeight + CGFloat(modelFooter + searchHeight))))
     }
 
@@ -82,14 +168,7 @@ struct ChatModelPickerCard: View {
                     DispatchQueue.main.async { focus = "options" }
                 }
             } else {
-                HStack(alignment: .top, spacing: 20) {
-                    providerColumn
-                    modelColumn
-                    if let reasoning, let control {
-                        reasoningColumn(reasoning, control: control)
-                    }
-                }
-                .padding(16)
+                columns
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -106,6 +185,17 @@ struct ChatModelPickerCard: View {
             focus = provider.map { "provider:\($0.id)" } ?? providers.first.map { "provider:\($0.id)" }
         }
         .onChange(of: preferredSize) { _, _ in reportSize() }
+        .onChange(of: currentReasoning, initial: true) { previous, current in
+            if let current {
+                retainedReasoning = current
+            } else {
+                retainedReasoning = visibleReasoningWidth > 0 ? previous ?? retainedReasoning : nil
+            }
+            restoreReasoningFocusIfNeeded(current)
+        }
+        .onChange(of: reasoningIsRevealed) { _, revealed in
+            if !revealed { restoreReasoningFocusIfNeeded(nil) }
+        }
         .onChange(of: providers) { _, updated in
             if !updated.contains(where: { $0.id == browsedProviderID && $0.isActive }) {
                 browsedProviderID = nil
@@ -123,6 +213,56 @@ struct ChatModelPickerCard: View {
             moveFocus(direction)
         }
         .accessibilityIdentifier("chat-model-picker")
+    }
+
+    private var columns: some View {
+        GeometryReader { geometry in
+            let slotWidth = min(columnWidth + ChatPickerLayout.columnSpacing,
+                                max(0, geometry.size.width - twoColumnWidth))
+            HStack(alignment: .top, spacing: 0) {
+                providerColumn.frame(width: columnWidth)
+                Color.clear.frame(width: ChatPickerLayout.columnSpacing).accessibilityHidden(true)
+                modelColumn.frame(width: columnWidth)
+                reasoningSlot(width: slotWidth)
+            }
+            .padding(ChatPickerLayout.padding)
+            .onChange(of: slotWidth, initial: true) { _, width in
+                visibleReasoningWidth = width
+                if width == 0, currentReasoning == nil { retainedReasoning = nil }
+            }
+        }
+    }
+
+    private func reasoningSlot(width: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Color.clear.frame(width: ChatPickerLayout.columnSpacing).accessibilityHidden(true)
+            Group {
+                if let snapshot = currentReasoning ?? retainedReasoning {
+                    reasoningColumn(snapshot)
+                } else {
+                    Color.clear.accessibilityHidden(true)
+                }
+            }
+            .frame(width: columnWidth)
+        }
+        .frame(width: columnWidth + ChatPickerLayout.columnSpacing, alignment: .leading)
+        .frame(width: width, alignment: .leading)
+        .clipped()
+        .contentShape(Rectangle())
+        .disabled(!reasoningIsRevealed)
+        .allowsHitTesting(reasoningIsRevealed)
+        .accessibilityHidden(!reasoningIsRevealed)
+    }
+
+    private func restoreReasoningFocusIfNeeded(_ snapshot: ChatPickerReasoningSnapshot?) {
+        guard let focus, focus.hasPrefix("reasoning:") else { return }
+        let rowID = String(focus.dropFirst("reasoning:".count))
+        guard snapshot?.rows.contains(where: { $0.id == rowID }) != true else { return }
+        if let selectedModel, models.contains(where: { $0.id == selectedModel }) {
+            self.focus = "model:\(selectedModel)"
+        } else {
+            self.focus = models.first.map { "model:\($0.id)" } ?? provider.map { "provider:\($0.id)" }
+        }
     }
 
     private func reportSize() {
@@ -255,33 +395,40 @@ struct ChatModelPickerCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func reasoningColumn(_ option: ModelOptionDefinition, control: ModelPickerOptionsControl) -> some View {
+    private func reasoningColumn(_ snapshot: ChatPickerReasoningSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             heading(L("Reasoning"))
-            if case .segmented(let segments) = option.kind {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: ChatPickerLayout.rowSpacing) {
-                            ForEach(segments) { segment in
-                                let key = "reasoning:\(segment.id)"
-                                ChatPickerRow(title: segment.label,
-                                              selected: (control.values[option.id]?.stringValue ?? control.defaults[option.id]?.stringValue) == segment.id,
-                                              focused: keyboardNavigation && focus == key, icon: { EmptyView() }) {
-                                    control.onChange(option.id, .string(segment.id))
-                                }
-                                .focused($focus, equals: key)
-                                .id(key)
-                                .help(control.capabilities?.levels.first { $0.id == segment.id }?.description ?? segment.label)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: ChatPickerLayout.rowSpacing) {
+                        ForEach(snapshot.rows) { row in
+                            let key = "reasoning:\(row.id)"
+                            ChatPickerRow(title: row.label,
+                                          selected: snapshot.selectedID == row.id,
+                                          focused: keyboardNavigation && focus == key, icon: { EmptyView() }) {
+                                selectReasoning(row.id, displayedFor: snapshot)
                             }
+                            .focused($focus, equals: key)
+                            .id(key)
+                            .help(row.help)
                         }
                     }
-                    .onChange(of: focus) { _, key in
-                        if let key, key.hasPrefix("reasoning:") { proxy.scrollTo(key) }
-                    }
+                }
+                .onChange(of: focus) { _, key in
+                    if let key, key.hasPrefix("reasoning:") { proxy.scrollTo(key) }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func selectReasoning(_ rowID: String, displayedFor snapshot: ChatPickerReasoningSnapshot) {
+        guard reasoningIsRevealed, let reasoning, let control,
+            selectedModel == snapshot.modelID, reasoning.id == snapshot.optionID,
+            case .segmented(let segments) = reasoning.kind,
+            segments.contains(where: { $0.id == rowID })
+        else { return }
+        control.onChange(reasoning.id, .string(rowID))
     }
 
     private func footerButton(_ title: String, key: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -323,7 +470,7 @@ struct ChatModelPickerCard: View {
         if provider?.isLocal == true || provider?.isOsaurusCloud == true { modelKeys.append("more") }
         if hasAdditionalOptions { modelKeys.append("options") }
         var columns = [providers.map { "provider:\($0.id)" }, modelKeys]
-        if let reasoning, case .segmented(let segments) = reasoning.kind {
+        if reasoningIsRevealed, let reasoning, case .segmented(let segments) = reasoning.kind {
             columns.append(segments.map { "reasoning:\($0.id)" })
         }
         return columns
