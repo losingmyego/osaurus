@@ -356,7 +356,7 @@ private struct ChatPickerTextLink: View {
                 Text(title).underline(hovered)
                 Image(systemName: icon).font(.system(size: 11)).accessibilityHidden(true)
             }
-            .font(theme.font(size: CGFloat(theme.bodySize) - 1, weight: .regular))
+            .font(theme.font(size: CGFloat(theme.smallBodySize) - 1, weight: .regular))
             .foregroundStyle(hovered ? theme.primaryText : theme.tertiaryText)
             .padding(.leading, 12)
             .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
