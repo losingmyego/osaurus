@@ -181,7 +181,7 @@ struct ChatModelPickerCard: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(theme.primaryBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(theme.cardBorder, lineWidth: 1)
