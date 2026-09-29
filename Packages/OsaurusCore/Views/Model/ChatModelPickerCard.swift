@@ -184,7 +184,14 @@ struct ChatModelPickerCard: View {
         .background(theme.primaryBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(theme.cardBorder, lineWidth: 1)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [theme.glassEdgeLight.opacity(0.2), theme.primaryBorder.opacity(0.15)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
         }
         .font(theme.font(size: CGFloat(theme.bodySize)))
         .foregroundStyle(theme.primaryText)
