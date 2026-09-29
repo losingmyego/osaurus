@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+private enum ChatPickerLayout {
+    static let rowHeight: CGFloat = 36
+    static let rowSpacing: CGFloat = 1
+}
+
 /// The chat-only, column-based picker. Selection and option persistence remain
 /// owned by FloatingInputCard; browsing another provider never changes a model.
 struct ChatModelPickerCard: View {
@@ -63,8 +68,10 @@ struct ChatModelPickerCard: View {
         let modelFooter = (provider?.isLocal == true || provider?.isOsaurusCloud == true ? 44 : 0)
             + (hasAdditionalOptions ? 44 : 0)
         let searchHeight = (provider?.models.count ?? 0) > 10 ? 38 : 0
+        let rowsHeight = CGFloat(count) * ChatPickerLayout.rowHeight
+            + CGFloat(max(0, count - 1)) * ChatPickerLayout.rowSpacing
         return CGSize(width: reasoning == nil ? 532 : 792,
-                      height: CGFloat(min(480, max(236, 60 + count * 44 + modelFooter + searchHeight))))
+                      height: min(480, max(236, 68 + rowsHeight + CGFloat(modelFooter + searchHeight))))
     }
 
     var body: some View {
@@ -137,7 +144,7 @@ struct ChatModelPickerCard: View {
             heading(L("Provider"))
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: ChatPickerLayout.rowSpacing) {
                         ForEach(providers) { item in
                             let key = "provider:\(item.id)"
                             ChatPickerRow(
@@ -175,7 +182,7 @@ struct ChatModelPickerCard: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: ChatPickerLayout.rowSpacing) {
                         ForEach(models) { model in
                             let key = "model:\(model.id)"
                             HStack(spacing: 0) {
@@ -191,7 +198,7 @@ struct ChatModelPickerCard: View {
                                     } label: {
                                         Image(systemName: saved ? "star.fill" : "star")
                                             .font(.system(size: 13))
-                                            .frame(width: 28, height: 36)
+                                            .frame(width: 28, height: ChatPickerLayout.rowHeight)
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
@@ -254,7 +261,7 @@ struct ChatModelPickerCard: View {
             if case .segmented(let segments) = option.kind {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(spacing: 8) {
+                        VStack(spacing: ChatPickerLayout.rowSpacing) {
                             ForEach(segments) { segment in
                                 let key = "reasoning:\(segment.id)"
                                 ChatPickerRow(title: segment.label,
@@ -411,7 +418,7 @@ private struct ChatPickerRow<Icon: View>: View {
             }
             .foregroundStyle(muted && !hovered && !focused ? theme.tertiaryText : theme.primaryText)
             .padding(.horizontal, 12)
-            .frame(minHeight: 36)
+            .frame(minHeight: ChatPickerLayout.rowHeight)
             .contentShape(Rectangle())
             .background(selected || hovered || focused ? theme.tertiaryBackground : .clear,
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous))
