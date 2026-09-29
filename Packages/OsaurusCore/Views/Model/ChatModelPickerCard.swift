@@ -62,11 +62,9 @@ struct ChatModelPickerCard: View {
         let count = min(8, max(providers.count, max(provider?.models.count ?? 0, reasoningCount)))
         let modelFooter = (provider?.isLocal == true || provider?.isOsaurusCloud == true ? 44 : 0)
             + (hasAdditionalOptions ? 44 : 0)
-        let reasoningFooter = reasoning.flatMap { control?.values[$0.id] } == nil ? 0 : 44
-        let footer = max(modelFooter, reasoningFooter)
         let searchHeight = (provider?.models.count ?? 0) > 10 ? 38 : 0
         return CGSize(width: reasoning == nil ? 532 : 792,
-                      height: CGFloat(min(480, max(236, 60 + count * 44 + footer + searchHeight))))
+                      height: CGFloat(min(480, max(236, 60 + count * 44 + modelFooter + searchHeight))))
     }
 
     var body: some View {
@@ -127,7 +125,7 @@ struct ChatModelPickerCard: View {
 
     private func heading(_ title: String) -> some View {
         Text(title)
-            .font(theme.font(size: CGFloat(theme.bodySize) + 2))
+            .font(theme.font(size: CGFloat(theme.smallBodySize) + 2))
             .foregroundStyle(theme.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, 4)
@@ -194,8 +192,10 @@ struct ChatModelPickerCard: View {
                                         Image(systemName: saved ? "star.fill" : "star")
                                             .font(.system(size: 13))
                                             .frame(width: 28, height: 36)
+                                            .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
+                                    .pointingHandCursor()
                                     .focusable()
                                     .focusEffectDisabled()
                                     .focused($focus, equals: "favorite:\(model.id)")
@@ -273,18 +273,12 @@ struct ChatModelPickerCard: View {
                     }
                 }
             }
-            if control.values[option.id] != nil {
-                footerButton(L("Reset to default"), key: "reset", icon: "arrow.uturn.backward") {
-                    control.onChange(option.id, nil)
-                }
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func footerButton(_ title: String, key: String, icon: String, action: @escaping () -> Void) -> some View {
         ChatPickerTextLink(title: title, icon: icon, focused: keyboardNavigation && focus == key, action: action)
-            .padding(.leading, 12)
             .focused($focus, equals: key)
     }
 
@@ -323,9 +317,7 @@ struct ChatModelPickerCard: View {
         if hasAdditionalOptions { modelKeys.append("options") }
         var columns = [providers.map { "provider:\($0.id)" }, modelKeys]
         if let reasoning, case .segmented(let segments) = reasoning.kind {
-            var keys = segments.map { "reasoning:\($0.id)" }
-            if control?.values[reasoning.id] != nil { keys.append("reset") }
-            columns.append(keys)
+            columns.append(segments.map { "reasoning:\($0.id)" })
         }
         return columns
     }
@@ -366,13 +358,15 @@ private struct ChatPickerTextLink: View {
             }
             .font(theme.font(size: CGFloat(theme.bodySize) - 1, weight: .regular))
             .foregroundStyle(hovered ? theme.primaryText : theme.tertiaryText)
-            .frame(minHeight: 32, alignment: .leading)
+            .padding(.leading, 12)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
             .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 if focused { Rectangle().fill(theme.secondaryText).frame(height: 1) }
             }
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .focusable()
         .focusEffectDisabled()
         .onHover { hovered = $0 }
@@ -398,7 +392,10 @@ private struct ChatPickerRow<Icon: View>: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 icon().accessibilityHidden(true)
-                Text(title).lineLimit(1).truncationMode(.middle)
+                Text(title)
+                    .font(theme.font(size: CGFloat(theme.smallBodySize)))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer(minLength: 4)
                 if explore && (hovered || focused) {
                     Text("Explore", bundle: .module)
@@ -428,6 +425,7 @@ private struct ChatPickerRow<Icon: View>: View {
             }
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .focusable()
         .focusEffectDisabled()
         .onHover { hovered = $0 }
@@ -447,6 +445,7 @@ private struct ChatModelOptionsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Button(action: onBack) { Label(L("Back to models"), systemImage: "chevron.backward") }
+                .pointingHandCursor()
                 .focused($backFocused)
             Text("Model options", bundle: .module).font(theme.font(size: 16, weight: .medium))
             ScrollView {
@@ -460,6 +459,7 @@ private struct ChatModelOptionsPanel: View {
                             Text("On", bundle: .module).tag("on")
                             Text("Off", bundle: .module).tag("off")
                         }
+                        .pointingHandCursor()
                     }
                     ForEach(control.options) { option in
                         VStack(alignment: .leading, spacing: 6) {
@@ -472,13 +472,16 @@ private struct ChatModelOptionsPanel: View {
                                     Text("Default", bundle: .module).tag("__default")
                                     ForEach(segments) { Text($0.label).tag($0.id) }
                                 }
+                                .pointingHandCursor()
                             case .toggle:
                                 Toggle(option.label, isOn: Binding(
                                     get: { control.effectiveToggleValue(for: option) },
                                     set: { control.onChange(option.id, .bool($0)) }
                                 ))
+                                .pointingHandCursor()
                                 if control.values[option.id] != nil {
                                     Button(L("Reset to default")) { control.onChange(option.id, nil) }
+                                        .pointingHandCursor()
                                 }
                             }
                             if let help = option.help {
