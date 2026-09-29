@@ -6400,7 +6400,10 @@ extension NSImage {
 /// larger values for its heavier look.
 private struct PopoverCardModifier: ViewModifier {
     var cornerRadius: CGFloat = 10
+    var backgroundColor: Color? = nil
     var accentOpacity: (dark: Double, light: Double) = (0.04, 0.03)
+    var borderColor: Color? = nil
+    var borderWidth: CGFloat = 1
     var borderOpacity: Double = 0.12
     var shadowOpacity: Double = 0.2
     var shadowRadius: CGFloat = 16
@@ -6412,38 +6415,46 @@ private struct PopoverCardModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         content
             .background {
-                ZStack {
-                    if theme.glassEnabled {
-                        shape.fill(.ultraThinMaterial)
+                if let backgroundColor {
+                    shape.fill(backgroundColor)
+                } else {
+                    ZStack {
+                        if theme.glassEnabled {
+                            shape.fill(.ultraThinMaterial)
+                        }
+                        shape.fill(theme.primaryBackground.opacity(theme.isDark ? 0.85 : 0.92))
+                        LinearGradient(
+                            colors: [
+                                theme.accentColor.opacity(
+                                    theme.isDark ? accentOpacity.dark : accentOpacity.light
+                                ),
+                                .clear,
+                            ],
+                            startPoint: .top,
+                            endPoint: .center
+                        )
+                        .clipShape(shape)
                     }
-                    shape.fill(theme.primaryBackground.opacity(theme.isDark ? 0.85 : 0.92))
-                    LinearGradient(
-                        colors: [
-                            theme.accentColor.opacity(
-                                theme.isDark ? accentOpacity.dark : accentOpacity.light
-                            ),
-                            .clear,
-                        ],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                    .clipShape(shape)
                 }
             }
             .clipShape(shape)
-            .overlay(
-                shape.strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            theme.glassEdgeLight.opacity(0.2),
-                            theme.primaryBorder.opacity(borderOpacity),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-            )
+            .overlay {
+                if let borderColor {
+                    shape.strokeBorder(borderColor, lineWidth: borderWidth)
+                } else {
+                    shape.strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                theme.glassEdgeLight.opacity(0.2),
+                                theme.primaryBorder.opacity(borderOpacity),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                }
+            }
             .shadow(
                 color: theme.shadowColor.opacity(shadowOpacity),
                 radius: shadowRadius,
@@ -6458,7 +6469,10 @@ private extension View {
     /// border, soft shadow). Tunable for the heavier model-options panel.
     func popoverCard(
         cornerRadius: CGFloat = 10,
+        backgroundColor: Color? = nil,
         accentOpacity: (dark: Double, light: Double) = (0.04, 0.03),
+        borderColor: Color? = nil,
+        borderWidth: CGFloat = 1,
         borderOpacity: Double = 0.12,
         shadowOpacity: Double = 0.2,
         shadowRadius: CGFloat = 16,
@@ -6467,7 +6481,10 @@ private extension View {
         modifier(
             PopoverCardModifier(
                 cornerRadius: cornerRadius,
+                backgroundColor: backgroundColor,
                 accentOpacity: accentOpacity,
+                borderColor: borderColor,
+                borderWidth: borderWidth,
                 borderOpacity: borderOpacity,
                 shadowOpacity: shadowOpacity,
                 shadowRadius: shadowRadius,
@@ -7337,6 +7354,8 @@ private struct WalletPopover: View {
     @ObservedObject private var accountService = OsaurusRouterAccountService.shared
     @Environment(\.theme) private var theme
 
+    private var subduedTextColor: Color { theme.isDark ? theme.tertiaryText : theme.secondaryText }
+
     /// Shared so each row doesn't allocate a formatter; relative labels like
     /// "3h ago" only need minute resolution.
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -7376,7 +7395,12 @@ private struct WalletPopover: View {
             footerActions
         }
         .frame(width: 272)
-        .popoverCard()
+        .popoverCard(
+            backgroundColor: theme.secondaryBackground,
+            borderColor: theme.primaryBorder.opacity(theme.borderOpacity),
+            borderWidth: theme.defaultBorderWidth
+        )
+        .background(PopoverWindowShadowSuppressor())
         .task {
             await accountService.refreshBalance()
             await accountService.refreshUsage(reset: true)
@@ -7388,7 +7412,7 @@ private struct WalletPopover: View {
 
     // MARK: Sections
 
-    /// Hero balance over a soft accent wash — the "card face" of the wallet.
+    /// Hero balance at the top of the wallet.
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
@@ -7441,25 +7465,18 @@ private struct WalletPopover: View {
             if accountService.isFrozen {
                 Text("Account paused - add credits to resume.", bundle: .module)
                     .font(.system(size: 10))
-                    .foregroundColor(theme.tertiaryText)
+                    .foregroundColor(subduedTextColor)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Available balance", bundle: .module)
                     .font(.system(size: 10))
-                    .foregroundColor(theme.tertiaryText)
+                    .foregroundColor(subduedTextColor)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.top, 12)
         .padding(.bottom, 11)
-        .background(
-            LinearGradient(
-                colors: [theme.accentColor.opacity(0.10), theme.accentColor.opacity(0.02)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
     }
 
     private func sessionSpendRow(_ spend: String, cachedLabel: String?) -> some View {
@@ -7549,7 +7566,7 @@ private struct WalletPopover: View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Recent activity", bundle: .module)
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(theme.tertiaryText)
+                .foregroundColor(subduedTextColor)
                 .textCase(.uppercase)
                 .kerning(0.8)
 
@@ -7575,7 +7592,7 @@ private struct WalletPopover: View {
                 .foregroundColor(theme.tertiaryText.opacity(0.7))
             Text("No activity yet", bundle: .module)
                 .font(.system(size: 11))
-                .foregroundColor(theme.tertiaryText)
+                .foregroundColor(subduedTextColor)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 6)
@@ -7612,7 +7629,7 @@ private struct WalletPopover: View {
                 if let timeLabel = timeLabel(for: row) {
                     Text(verbatim: timeLabel)
                         .font(.system(size: 9))
-                        .foregroundColor(theme.tertiaryText)
+                        .foregroundColor(subduedTextColor)
                 }
             }
 

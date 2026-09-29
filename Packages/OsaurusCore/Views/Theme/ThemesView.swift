@@ -1359,7 +1359,12 @@ struct ThemesView: View {
     /// current theme rather than stop at the gallery. System appearance uses
     /// its currently resolved light or dark theme.
     private func routeSettingsLanding(_ pending: String?) {
-        guard pending == "themes.typography.smallBody" else { return }
+        guard let pending,
+            [
+                "themes.typography.smallBody",
+                "themes.borders.color", "themes.borders.width", "themes.borders.opacity",
+            ].contains(pending)
+        else { return }
         guard editingTheme == nil else { return }
         let builtIn = themeManager.installedThemes.first(where: {
             ThemeManager.appearanceMode(forBuiltInTheme: $0) == (theme.isDark ? .dark : .light)

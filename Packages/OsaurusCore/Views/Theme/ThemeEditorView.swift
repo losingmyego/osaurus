@@ -549,8 +549,11 @@ struct ThemeEditorView: View {
                 )
                 .textCase(.uppercase)
                 colorRow("Border Color", hex: $editingTheme.colors.primaryBorder)
+                    .settingsLandingAnchor("themes.borders.color")
                 sliderRow("Border Width", value: $editingTheme.borders.defaultWidth, range: 0 ... 4)
+                    .settingsLandingAnchor("themes.borders.width")
                 sliderRow("Border Opacity", value: $editingTheme.borders.borderOpacity, range: 0 ... 1)
+                    .settingsLandingAnchor("themes.borders.opacity")
 
                 Divider().opacity(0.3)
 

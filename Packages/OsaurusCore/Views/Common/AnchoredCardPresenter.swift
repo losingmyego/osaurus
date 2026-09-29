@@ -121,7 +121,11 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
     let accessibilityLabel: String
     let content: Card
 
-    @Environment(\.self) private var environment
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.locale) private var locale
 
     func makeCoordinator() -> AnchoredCardCoordinator { AnchoredCardCoordinator() }
 
@@ -139,11 +143,18 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
         coordinator.isPresented = $isPresented
         coordinator.requestedSize = size
         coordinator.accessibilityLabel = accessibilityLabel
-        coordinator.rightToLeft = environment.layoutDirection == .rightToLeft
+        coordinator.rightToLeft = layoutDirection == .rightToLeft
         coordinator.content = { metrics in
             AnyView(content
                 .environment(\.anchoredCardMetrics, metrics)
-                .environment(\.self, environment))
+                // A separate hosting window needs its own focus environment.
+                // Forward visual values rather than the parent's focus bridge.
+                .environment(\.theme, theme)
+                .environment(\.colorScheme, colorScheme)
+                .environment(\.colorSchemeContrast, colorSchemeContrast)
+                .environment(\.layoutDirection, layoutDirection)
+                .environment(\.locale, locale)
+                .tint(theme.accentColor))
         }
         coordinator.scheduleUpdate()
     }
@@ -329,7 +340,9 @@ private final class AnchoredCardCoordinator {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // AppKit's shadow includes a bright rim on macOS. Let the card's
+        // themed stroke own its edge instead of stacking native chrome.
+        panel.hasShadow = false
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = false
         panel.hidesOnDeactivate = false

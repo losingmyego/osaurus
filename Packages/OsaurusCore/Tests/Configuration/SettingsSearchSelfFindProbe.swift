@@ -59,6 +59,13 @@ struct SettingsSearchSelfFindProbe {
     @Test("controls are findable by the label they display")
     func controlsFindableByOnScreenLabel() {
         let labels: [(query: String, entryID: String)] = [
+            ("Border Color", "themes.borders.color"),
+            ("Border Width", "themes.borders.width"),
+            ("Border Opacity", "themes.borders.opacity"),
+            ("model picker border", "themes.borders.color"),
+            ("Credits border", "themes.borders.color"),
+            ("menu border width", "themes.borders.width"),
+            ("dropdown border opacity", "themes.borders.opacity"),
             ("Small body", "themes.typography.smallBody"),
             ("compact controls", "themes.typography.smallBody"),
             ("model picker", "themes.typography.smallBody"),
@@ -215,6 +222,24 @@ struct SettingsSearchSelfFindProbe {
         #expect(entry.title == "Small body")
         #expect(entry.isSettingsUIOnly)
         #expect(!SettingsSearchIndex.tabLevelEntryIDs.contains(entry.id))
+    }
+
+    @Test("menu border searches land on the default border controls")
+    func menuBorderSearchesTargetDefaultControls() throws {
+        let controls = [
+            (query: "model picker border", id: "themes.borders.color", title: "Border Color"),
+            (query: "Credits border", id: "themes.borders.color", title: "Border Color"),
+            (query: "model picker border width", id: "themes.borders.width", title: "Border Width"),
+            (query: "Credits border opacity", id: "themes.borders.opacity", title: "Border Opacity"),
+        ]
+        for control in controls {
+            let entry = try #require(SettingsSearchIndex.search(control.query).first)
+            #expect(entry.id == control.id)
+            #expect(entry.title == control.title)
+            #expect(entry.tab == .themes)
+            #expect(entry.section == "Borders & Effects")
+            #expect(!SettingsSearchIndex.tabLevelEntryIDs.contains(entry.id))
+        }
     }
 
     /// Guards the probe itself: an index that shrank to nothing, or a matcher

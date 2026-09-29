@@ -181,17 +181,10 @@ struct ChatModelPickerCard: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.primaryBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(theme.secondaryBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [theme.glassEdgeLight.opacity(0.2), theme.primaryBorder.opacity(0.15)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
+                .strokeBorder(theme.primaryBorder.opacity(theme.borderOpacity), lineWidth: theme.defaultBorderWidth)
         }
         .font(theme.font(size: CGFloat(theme.bodySize)))
         .foregroundStyle(theme.primaryText)
@@ -520,10 +513,13 @@ private struct ChatPickerTextLink: View {
     @Environment(\.theme) private var theme
     @State private var hovered = false
 
+    private var subduedTextColor: Color { theme.isDark ? theme.tertiaryText : theme.secondaryText }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Text(title).underline(hovered)
+                    .foregroundStyle(hovered ? theme.primaryText : subduedTextColor)
                 Image(systemName: icon).font(.system(size: 11)).accessibilityHidden(true)
             }
             .font(theme.font(size: CGFloat(theme.smallBodySize) - 1, weight: .regular))
@@ -558,12 +554,15 @@ private struct ChatPickerRow<Icon: View>: View {
     @Environment(\.theme) private var theme
     @State private var hovered = false
 
+    private var subduedTextColor: Color { theme.isDark ? theme.tertiaryText : theme.secondaryText }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 icon().accessibilityHidden(true)
                 Text(title)
                     .font(theme.font(size: CGFloat(theme.smallBodySize)))
+                    .foregroundStyle(muted && !hovered && !focused ? subduedTextColor : theme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
