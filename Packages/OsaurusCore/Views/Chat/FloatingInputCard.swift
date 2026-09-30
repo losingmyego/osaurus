@@ -7331,8 +7331,8 @@ private struct ContextBreakdownPopover: View {
 
 // MARK: - Wallet Popover
 
-/// The composer wallet panel, styled to match `ContextBreakdownPopover`
-/// (rounded glass card, 11pt headers, hairline dividers, monospaced values).
+/// The composer wallet panel, presented in the same arrowless, themed card
+/// as the model picker, aligned to the trailing edge of its credits chip.
 /// Opens from the credits chip as a hover preview or a pinned click-through
 /// panel: balance hero, per-session router spend, recent account activity
 /// (model requests + ledger transactions), and Add credits / View all actions.
@@ -7350,9 +7350,11 @@ private struct WalletPopover: View {
     let isAttention: Bool
     let onAddCredits: () -> Void
     let onViewAll: () -> Void
+    let onHeightChange: (CGFloat) -> Void
 
     @ObservedObject private var accountService = OsaurusRouterAccountService.shared
     @Environment(\.theme) private var theme
+    @Environment(\.anchoredCardMetrics) private var cardMetrics
 
     private var subduedTextColor: Color { theme.isDark ? theme.tertiaryText : theme.secondaryText }
 
@@ -7373,6 +7375,33 @@ private struct WalletPopover: View {
     }
 
     var body: some View {
+        ScrollView {
+            walletContent
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    ceil(geometry.size.height)
+                } action: { height in
+                    onHeightChange(height)
+                }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: cardMetrics?.visibleSize.width ?? 272, height: cardMetrics?.visibleSize.height)
+        .popoverCard(
+            cornerRadius: 16,
+            backgroundColor: theme.secondaryBackground,
+            borderColor: theme.primaryBorder.opacity(theme.borderOpacity),
+            borderWidth: theme.defaultBorderWidth
+        )
+        .task {
+            await accountService.refreshBalance()
+            await accountService.refreshUsage(reset: true)
+            await accountService.refreshTransactions(reset: true)
+            await accountService.refreshWebUsage(reset: true)
+            await accountService.refreshWebSettings()
+        }
+    }
+
+    private var walletContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if let sessionSpend {
@@ -7393,20 +7422,6 @@ private struct WalletPopover: View {
             activitySection
             divider
             footerActions
-        }
-        .frame(width: 272)
-        .popoverCard(
-            backgroundColor: theme.secondaryBackground,
-            borderColor: theme.primaryBorder.opacity(theme.borderOpacity),
-            borderWidth: theme.defaultBorderWidth
-        )
-        .background(PopoverWindowShadowSuppressor())
-        .task {
-            await accountService.refreshBalance()
-            await accountService.refreshUsage(reset: true)
-            await accountService.refreshTransactions(reset: true)
-            await accountService.refreshWebUsage(reset: true)
-            await accountService.refreshWebSettings()
         }
     }
 
@@ -8621,6 +8636,8 @@ private struct FloatingCreditsChip: View {
     /// True when the wallet panel was opened by click; hover exit no longer
     /// dismisses it, only outside-click / an action does.
     @State private var walletPanelPinned = false
+    /// Measured before the first presentation, then updated as activity loads.
+    @State private var walletPanelHeight: CGFloat = 0
     @State private var balanceHoverTask: Task<Void, Never>?
     /// Delayed dismiss for the hover-opened wallet panel. Gives the cursor a
     /// grace period to travel from the chip into the panel (which lives in its
@@ -8800,7 +8817,14 @@ private struct FloatingCreditsChip: View {
                 scheduleWalletDismiss()
             }
         }
-        .popover(isPresented: $showWalletPanel, arrowEdge: .top) {
+        .anchoredCard(
+            isPresented: $showWalletPanel,
+            size: CGSize(width: 272, height: walletPanelHeight),
+            alignment: .trailing,
+            constrainToWindow: true,
+            takesFocus: walletPanelPinned,
+            accessibilityLabel: L("Credits")
+        ) {
             WalletPopover(
                 sessionSpend: isRouterBilledSession ? sessionSpendDisplay : nil,
                 sessionCachedInputLabel: isRouterBilledSession ? sessionCachedInputLabel : nil,
@@ -8812,7 +8836,8 @@ private struct FloatingCreditsChip: View {
                 onViewAll: {
                     closeWalletPanel()
                     AppDelegate.shared?.showManagementWindow(initialTab: .credits)
-                }
+                },
+                onHeightChange: { walletPanelHeight = $0 }
             )
             // Keep the panel alive while the cursor is over it, so the user
             // can travel from the chip and click Add credits / View all.
@@ -8827,7 +8852,16 @@ private struct FloatingCreditsChip: View {
         .onChange(of: showWalletPanel) { _, isShown in
             // Outside-click dismissal flips the binding directly; unpin so the
             // next hover preview behaves normally.
-            if !isShown { walletPanelPinned = false }
+            if !isShown {
+                walletPanelPinned = false
+                walletPanelHeight = 0
+                balanceHoverTask?.cancel()
+                walletDismissTask?.cancel()
+            }
+        }
+        .onDisappear {
+            balanceHoverTask?.cancel()
+            walletDismissTask?.cancel()
         }
     }
 

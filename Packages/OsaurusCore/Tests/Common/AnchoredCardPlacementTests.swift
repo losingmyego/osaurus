@@ -58,6 +58,59 @@ struct AnchoredCardPlacementTests {
         #expect(result.maxX == 1060)
     }
 
+    @Test func trailingAlignedCardMatchesTheCreditsButtonRightEdge() {
+        let anchor = CGRect(x: 750, y: 100, width: 120, height: 28)
+        let result = AnchoredCardPlacement.frame(
+            anchor: anchor,
+            size: CGSize(width: 272, height: 300),
+            visibleFrame: display,
+            trailingAligned: true,
+            containerFrame: CGRect(x: 200, y: 50, width: 700, height: 650)
+        )
+        #expect(result == CGRect(x: 598, y: 136, width: 272, height: 300))
+        #expect(result.maxX == anchor.maxX)
+    }
+
+    @Test func trailingAlignmentMirrorsInRightToLeftLayouts() {
+        let anchor = CGRect(x: 250, y: 100, width: 120, height: 28)
+        let result = AnchoredCardPlacement.frame(
+            anchor: anchor,
+            size: CGSize(width: 272, height: 300),
+            visibleFrame: display,
+            rightToLeft: true,
+            trailingAligned: true
+        )
+        #expect(result.minX == anchor.minX)
+    }
+
+    @Test func creditsCardStaysInsideANarrowChatWindow() {
+        let chat = CGRect(x: 300, y: 100, width: 260, height: 400)
+        let result = AnchoredCardPlacement.frame(
+            anchor: CGRect(x: 430, y: 120, width: 118, height: 28),
+            size: CGSize(width: 272, height: 600),
+            visibleFrame: display,
+            trailingAligned: true,
+            containerFrame: chat
+        )
+        #expect(chat.insetBy(dx: 12, dy: 12).contains(result))
+        #expect(result == CGRect(x: 312, y: 156, width: 236, height: 332))
+    }
+
+    @Test func partiallyOffscreenChatClampsToBothWindowAndDisplay() {
+        let chat = CGRect(x: 1300, y: 50, width: 700, height: 650)
+        let result = AnchoredCardPlacement.frame(
+            anchor: CGRect(x: 1370, y: 100, width: 100, height: 28),
+            size: CGSize(width: 272, height: 300),
+            visibleFrame: display,
+            trailingAligned: true,
+            containerFrame: chat
+        )
+        #expect(chat.contains(result))
+        #expect(display.insetBy(dx: 12, dy: 12).contains(result))
+        #expect(result.maxX == 1428)
+        #expect(result.width == 116)
+    }
+
     @Test func externalDisplayMayHaveANegativeCoordinateOrigin() {
         let result = AnchoredCardPlacement.frame(
             anchor: CGRect(x: -200, y: 100, width: 160, height: 28),

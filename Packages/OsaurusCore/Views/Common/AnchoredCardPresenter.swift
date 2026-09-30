@@ -12,10 +12,14 @@ import SwiftUI
 extension View {
     /// Presents a card above this view, falling back below when the display
     /// has more room there. Content receives the actual screen-constrained
-    /// size and owns its surface, border and corner treatment.
+    /// size and owns its surface, border and corner treatment. A zero height
+    /// lets content report its measured size before the card first appears.
     func anchoredCard<Card: View>(
         isPresented: Binding<Bool>,
         size: CGSize,
+        alignment: HorizontalAlignment = .leading,
+        constrainToWindow: Bool = false,
+        takesFocus: Bool = true,
         accessibilityLabel: String = "Options",
         @ViewBuilder content: () -> Card
     ) -> some View {
@@ -23,6 +27,9 @@ extension View {
             AnchoredCardAnchor(
                 isPresented: isPresented,
                 size: size,
+                alignment: alignment,
+                constrainToWindow: constrainToWindow,
+                takesFocus: takesFocus,
                 accessibilityLabel: accessibilityLabel,
                 content: content()
             )
@@ -33,26 +40,31 @@ extension View {
 /// Screen coordinates use AppKit's bottom-left origin. Keep this calculation
 /// independent of the window so edge cases can be checked without showing UI.
 enum AnchoredCardPlacement {
+    static func availableFrame(visibleFrame: CGRect, containerFrame: CGRect? = nil) -> CGRect {
+        let intersection = containerFrame.map { visibleFrame.intersection($0) } ?? visibleFrame
+        let bounds = intersection.isEmpty ? visibleFrame : intersection
+        return bounds.insetBy(dx: min(12, bounds.width / 4), dy: min(12, bounds.height / 4))
+    }
+
     static func frame(
         anchor: CGRect,
         size: CGSize,
         visibleFrame: CGRect,
         rightToLeft: Bool = false,
+        trailingAligned: Bool = false,
+        containerFrame: CGRect? = nil,
         preferAbove: Bool? = nil
     ) -> CGRect {
-        let inset: CGFloat = 12
         let gap: CGFloat = 8
-        let safe = visibleFrame.insetBy(
-            dx: min(inset, visibleFrame.width / 4),
-            dy: min(inset, visibleFrame.height / 4)
-        )
+        let safe = availableFrame(visibleFrame: visibleFrame, containerFrame: containerFrame)
         let width = min(max(1, size.width), safe.width)
         let desiredHeight = max(1, size.height)
         let above = max(0, safe.maxY - anchor.maxY - gap)
         let below = max(0, anchor.minY - gap - safe.minY)
         let placeAbove = preferAbove ?? (above >= desiredHeight || (below < desiredHeight && above >= below))
         let height = min(desiredHeight, max(1, placeAbove ? above : below))
-        let preferredX = rightToLeft ? anchor.maxX - width : anchor.minX
+        let alignRight = rightToLeft != trailingAligned
+        let preferredX = alignRight ? anchor.maxX - width : anchor.minX
         let preferredY = placeAbove ? anchor.maxY + gap : anchor.minY - gap - height
         return CGRect(
             x: min(max(preferredX, safe.minX), safe.maxX - width),
@@ -118,6 +130,9 @@ private struct AnchoredCardRoot: View {
 private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     let size: CGSize
+    let alignment: HorizontalAlignment
+    let constrainToWindow: Bool
+    let takesFocus: Bool
     let accessibilityLabel: String
     let content: Card
 
@@ -143,6 +158,9 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
         coordinator.requestedSize = size
         coordinator.accessibilityLabel = accessibilityLabel
         coordinator.rightToLeft = layoutDirection == .rightToLeft
+        coordinator.trailingAligned = alignment == .trailing
+        coordinator.constrainToWindow = constrainToWindow
+        coordinator.takesFocus = takesFocus
         coordinator.content = { metrics in
             AnyView(content
                 .environment(\.anchoredCardMetrics, metrics)
@@ -172,6 +190,9 @@ private final class AnchoredCardCoordinator {
     var requestedSize: CGSize = .zero
     var accessibilityLabel = ""
     var rightToLeft = false
+    var trailingAligned = false
+    var constrainToWindow = false
+    var takesFocus = true
     var content: (AnchoredCardMetrics) -> AnyView = { _ in AnyView(EmptyView()) }
 
     private weak var parent: NSWindow?
@@ -233,6 +254,8 @@ private final class AnchoredCardCoordinator {
             present(in: window, frame: frame)
         }
         guard let panel else { return }
+        let firstPresentation = !panel.isVisible
+        panel.becomesKeyOnlyIfNeeded = !takesFocus
         panel.setAccessibilityLabel(accessibilityLabel)
         panel.title = accessibilityLabel
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -245,10 +268,12 @@ private final class AnchoredCardCoordinator {
         if presentedFrame == frame {
             stopResize()
             updateContent(target: frame.size, isAnimating: false)
+            host?.layoutSubtreeIfNeeded()
+            showWhenReady()
             return
         }
         let changesSize = presentedFrame.size != frame.size
-        if changesSize && !skipAnimation && !reduceMotion {
+        if changesSize && !firstPresentation && !skipAnimation && !reduceMotion {
             // Retarget from the last frame actually drawn, including when the
             // user reverses direction before the previous resize finishes.
             resizeTransition = AnchoredCardResizeTransition(
@@ -265,6 +290,16 @@ private final class AnchoredCardCoordinator {
         } else {
             stopResize()
             applyFrame(frame, target: frame.size, isAnimating: false)
+        }
+        showWhenReady()
+    }
+
+    private func showWhenReady() {
+        guard requestedSize.height > 0, let panel else { return }
+        if takesFocus {
+            if !belongsToCard(NSApp.keyWindow) { panel.makeKeyAndOrderFront(nil) }
+        } else if !panel.isVisible {
+            panel.orderFront(nil)
         }
     }
 
@@ -311,8 +346,9 @@ private final class AnchoredCardCoordinator {
             ?? window.screen
             ?? NSScreen.main
         let visibleFrame = screen?.visibleFrame ?? window.frame
-        let safeFrame = visibleFrame.insetBy(
-            dx: min(12, visibleFrame.width / 4), dy: min(12, visibleFrame.height / 4)
+        let containerFrame = constrainToWindow ? window.convertToScreen(window.contentLayoutRect) : nil
+        let safeFrame = AnchoredCardPlacement.availableFrame(
+            visibleFrame: visibleFrame, containerFrame: containerFrame
         )
         return (
             AnchoredCardPlacement.frame(
@@ -320,6 +356,8 @@ private final class AnchoredCardCoordinator {
                 size: requestedSize,
                 visibleFrame: visibleFrame,
                 rightToLeft: rightToLeft,
+                trailingAligned: trailingAligned,
+                containerFrame: containerFrame,
                 preferAbove: !suppressNextAnimation && lastAnchorFrame?.origin == anchorFrame.origin ? prefersAbove : nil
             ),
             anchorFrame,
@@ -344,7 +382,7 @@ private final class AnchoredCardCoordinator {
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = false
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = false
+        panel.becomesKeyOnlyIfNeeded = !takesFocus
         panel.level = parent.level
         panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
         panel.animationBehavior = .none
@@ -368,7 +406,6 @@ private final class AnchoredCardCoordinator {
         presentedFrame = frame
         installObservers(parent: parent, panel: panel)
         parent.addChildWindow(panel, ordered: .above)
-        panel.makeKeyAndOrderFront(nil)
         panel.recalculateKeyViewLoop()
     }
 
@@ -400,7 +437,11 @@ private final class AnchoredCardCoordinator {
         observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] notification in
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.panel != nil else { return }
-                if !self.belongsToCard(NSApp.keyWindow) { self.dismiss(restoreFocus: false) }
+                if !self.belongsToCard(NSApp.keyWindow),
+                    self.takesFocus || NSApp.keyWindow !== self.parent
+                {
+                    self.dismiss(restoreFocus: false)
+                }
             }
         })
         eventMonitor = NSEvent.addLocalMonitorForEvents(
@@ -429,7 +470,9 @@ private final class AnchoredCardCoordinator {
         if event.type == .keyDown {
             // Parent chat windows have their own Escape-to-close shortcut.
             // Keep focus here and consume Escape before it can reach that.
-            if event.window === panel, event.keyCode == 53 {
+            if event.keyCode == 53,
+                event.window === panel || (!takesFocus && event.window === parent)
+            {
                 dismiss(restoreFocus: true)
                 return nil
             }

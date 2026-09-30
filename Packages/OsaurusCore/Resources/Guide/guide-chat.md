@@ -83,3 +83,7 @@ Open the model pill to browse Provider and Model columns. Installed Local models
 The Cloud shortlist contains favorites plus the current Cloud model. Use the star to add or remove a favorite in either the shortlist or the full browser. More models opens the same Local or Cloud destination.
 
 Selecting a model with multiple reasoning levels reveals a Reasoning column with the saved choice or model default selected. Selections keep the card open; click outside or press Escape to close it. Other model options remain available from Model options.
+
+## Credits in chat
+
+Hover over the Credits button to preview your wallet, or click to keep it open. The arrowless card aligns with the button's trailing edge and stays inside the chat window. If space is limited, scroll to reach the remaining activity and actions. Click outside or press Escape to dismiss it. Add credits opens the top-up dialog; View all opens Credits in Settings.
