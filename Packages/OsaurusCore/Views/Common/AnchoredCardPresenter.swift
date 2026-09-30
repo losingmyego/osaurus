@@ -247,14 +247,14 @@ private final class AnchoredCardCoordinator {
         // origin. That is a selection resize, not a window move to snap.
         let anchorMoved = lastAnchorFrame.map { $0.origin != placement.anchorFrame.origin } ?? false
         lastAnchorFrame = placement.anchorFrame
-        prefersAbove = frame.minY >= placement.anchorFrame.maxY
+        if requestedSize.height > 0 { prefersAbove = frame.minY >= placement.anchorFrame.maxY }
         let skipAnimation = suppressNextAnimation || anchorMoved
         suppressNextAnimation = false
         if panel == nil {
             present(in: window, frame: frame)
         }
         guard let panel else { return }
-        let firstPresentation = !panel.isVisible
+        let firstPresentation = panel.alphaValue == 0
         panel.becomesKeyOnlyIfNeeded = !takesFocus
         panel.setAccessibilityLabel(accessibilityLabel)
         panel.title = accessibilityLabel
@@ -295,9 +295,20 @@ private final class AnchoredCardCoordinator {
     }
 
     private func showWhenReady() {
-        guard requestedSize.height > 0, let panel else { return }
+        guard let panel else { return }
+        // SwiftUI measures ScrollView content only after the host participates
+        // in a visible window. Keep that first layout transparent, non-key,
+        // and out of hit testing and accessibility until its size is known.
+        guard requestedSize.height > 0 else {
+            if !panel.isVisible { panel.orderFront(nil) }
+            host?.layoutSubtreeIfNeeded()
+            return
+        }
+        panel.alphaValue = 1
+        panel.ignoresMouseEvents = false
+        panel.setAccessibilityHidden(false)
         if takesFocus {
-            if !belongsToCard(NSApp.keyWindow) { panel.makeKeyAndOrderFront(nil) }
+            if !panel.isVisible || !belongsToCard(NSApp.keyWindow) { panel.makeKeyAndOrderFront(nil) }
         } else if !panel.isVisible {
             panel.orderFront(nil)
         }
@@ -376,6 +387,9 @@ private final class AnchoredCardCoordinator {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        panel.alphaValue = 0
+        panel.ignoresMouseEvents = true
+        panel.setAccessibilityHidden(true)
         // AppKit's shadow includes a bright rim on macOS. Let the card's
         // themed stroke own its edge instead of stacking native chrome.
         panel.hasShadow = false
