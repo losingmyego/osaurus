@@ -2658,12 +2658,10 @@ extension FloatingInputCard {
         )
     }
 
-    /// Effective thinking state for toggle-only reasoning models, shown as a
-    /// brain glyph on the model chip (accent while on, muted while off) so
-    /// the state stays visible at a glance beside the footer control and the
-    /// picker's Model Options row. Nil hides the glyph: models with a
-    /// segmented effort suffix, models without a thinking toggle, and Mode 2
-    /// remote-agent runs — the remote agent owns its generation config
+    /// Effective thinking state for toggle-only reasoning models, exposed in
+    /// the model chip's tooltip and accessibility value. Nil omits this detail
+    /// for models with a segmented effort suffix, models without a thinking
+    /// toggle, and Mode 2 remote-agent runs — the remote agent owns its generation config
     /// server-side, so a local state readout would mislead.
     private var inlineThinkingEnabled: Bool? {
         guard let model = selectedModel,
@@ -3003,17 +3001,17 @@ extension FloatingInputCard {
         /// load state is knowable.
         let isLocalModelRun: Bool
         let selectedModel: String?
+        let modelDetails: String
         @ObservedObject var warmupController: ChatWarmupController
 
         func body(content: Content) -> some View {
-            content.help(
-                isDeprecated
-                    ? String(
-                        localized: "This model is outdated. Click to switch to a newer version.",
-                        bundle: .module
-                    )
-                    : helpText
-            )
+            let status = isDeprecated
+                ? String(
+                    localized: "This model is outdated. Click to switch to a newer version.",
+                    bundle: .module
+                )
+                : helpText
+            content.help([status, modelDetails].filter { !$0.isEmpty }.joined(separator: "\n"))
         }
 
         private var helpText: String {
@@ -3072,6 +3070,26 @@ extension FloatingInputCard {
         showModelPicker = true
     }
 
+    /// Keep the pill visually simple while retaining the removed badges'
+    /// thinking and input-capability information for hover and VoiceOver.
+    private var modelSelectorDetails: String {
+        var details: [String] = []
+        if let thinkingOn = inlineThinkingEnabled {
+            if inlineThinkingUsesNativeDefault {
+                details.append([L("Thinking"), L("Default")].joined(separator: ": "))
+            } else {
+                details.append(thinkingOn ? L("Thinking on") : L("Thinking off"))
+            }
+        }
+        if selectedPickerItem?.isVLM == true {
+            details.append(L("Vision"))
+        }
+        if mediaCapabilities.supportsAudio {
+            details.append(L("Audio Input"))
+        }
+        return details.joined(separator: "\n")
+    }
+
     private var interactiveModelSelectorChip: some View {
         SelectorChip(isActive: showModelPicker) {
             if showModelPicker { dismissModelPicker() }
@@ -3091,7 +3109,7 @@ extension FloatingInputCard {
                         .frame(width: 6, height: 6)
                 }
 
-                // Model name with metadata badges
+                // Model name and reasoning text, without suffix icons.
                 if let option = selectedPickerItem {
                     HStack(spacing: 4) {
                         Text(option.displayName)
@@ -3112,53 +3130,6 @@ extension FloatingInputCard {
                                 .lineLimit(1)
                         }
 
-                        // Toggle-only thinking state as a glyph: accent while
-                        // on, muted while off. The interactive control remains
-                        // directly available in both the footer and picker.
-                        if let thinkingOn = inlineThinkingEnabled {
-                            Image(systemName: "brain")
-                                .font(theme.font(size: CGFloat(theme.captionSize) - 2, weight: .semibold))
-                                .foregroundColor(
-                                    inlineThinkingUsesNativeDefault
-                                        ? theme.secondaryText
-                                        : thinkingOn ? theme.accentColor : theme.tertiaryText.opacity(0.55)
-                                )
-                                .localizedHelp(
-                                    inlineThinkingUsesNativeDefault
-                                        ? "Default" : (thinkingOn ? "Thinking on" : "Thinking off")
-                                )
-                                .accessibilityLabel(Text("Thinking", bundle: .module))
-                                .accessibilityValue(
-                                    inlineThinkingUsesNativeDefault
-                                        ? Text("Default", bundle: .module)
-                                        : thinkingOn
-                                            ? Text("On", bundle: .module)
-                                            : Text("Off", bundle: .module)
-                                )
-                        }
-
-                        // Show VLM indicator
-                        if option.isVLM {
-                            Image(systemName: "eye")
-                                .font(theme.font(size: CGFloat(theme.captionSize) - 3))
-                                .foregroundColor(theme.accentColor)
-                        }
-
-                        // Audio indicator. The eye was the only modality
-                        // glyph here, so a Nemotron Omni / Gemma-4 E2B-E4B /
-                        // Gemma-4 12B bundle described itself as vision-only
-                        // on the one surface the user reads before typing —
-                        // while the composer beneath it was already
-                        // accepting `.wav`. Same capability source as the
-                        // attach button, so the two cannot disagree.
-                        if mediaCapabilities.supportsAudio {
-                            Image(systemName: "waveform")
-                                .font(theme.font(size: CGFloat(theme.captionSize) - 3))
-                                .foregroundColor(theme.accentColor)
-                                .localizedHelp("Audio Input")
-                                .accessibilityLabel(Text("Audio Input", bundle: .module))
-                        }
-
                         if !isCompact, let params = option.parameterCount {
                             Text(params)
                                 .font(theme.font(size: CGFloat(theme.captionSize) - 3, weight: .medium))
@@ -3176,18 +3147,16 @@ extension FloatingInputCard {
                         .font(theme.font(size: CGFloat(theme.captionSize), weight: .medium))
                         .foregroundColor(theme.secondaryText)
                 }
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(theme.font(size: CGFloat(theme.captionSize) - 3, weight: .semibold))
-                    .foregroundColor(theme.tertiaryText)
             }
         }
+        .accessibilityValue(Text(verbatim: modelSelectorDetails))
         // Chip-wide hover target: the 6px dot alone is too small to hover.
         .modifier(
             ModelWarmupHelp(
                 isDeprecated: isSelectedModelDeprecated,
                 isLocalModelRun: isSelectedModelLocal && !isRemoteAgentRun,
                 selectedModel: selectedModel,
+                modelDetails: modelSelectorDetails,
                 warmupController: warmupController
             )
         )
