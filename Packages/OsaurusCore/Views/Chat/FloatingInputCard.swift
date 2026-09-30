@@ -7300,6 +7300,13 @@ private struct ContextBreakdownPopover: View {
 
 // MARK: - Wallet Popover
 
+private enum WalletCardStyle {
+    static let shadowRadius: CGFloat = 16
+    static let shadowOffsetY: CGFloat = 8
+    // Leave room for the blur to fade out before the native window edge.
+    static let shadowPadding = 3 * shadowRadius + abs(shadowOffsetY)
+}
+
 /// The composer wallet panel, presented in the same arrowless, themed card
 /// as the model picker, aligned to the trailing edge of its credits chip.
 /// Opens from the credits chip as a hover preview or a pinned click-through
@@ -7359,7 +7366,9 @@ private struct WalletPopover: View {
             cornerRadius: 16,
             backgroundColor: theme.secondaryBackground,
             borderColor: theme.primaryBorder.opacity(theme.borderOpacity),
-            borderWidth: theme.defaultBorderWidth
+            borderWidth: theme.defaultBorderWidth,
+            shadowRadius: WalletCardStyle.shadowRadius,
+            shadowOffsetY: WalletCardStyle.shadowOffsetY
         )
         .task {
             await accountService.refreshBalance()
@@ -8605,6 +8614,7 @@ private struct FloatingCreditsChip: View {
     /// True when the wallet panel was opened by click; hover exit no longer
     /// dismisses it, only outside-click / an action does.
     @State private var walletPanelPinned = false
+    @State private var walletHover = HoverPreviewPresence()
     /// Measured before the first presentation, then updated as activity loads.
     @State private var walletPanelHeight: CGFloat = 0
     @State private var balanceHoverTask: Task<Void, Never>?
@@ -8767,6 +8777,7 @@ private struct FloatingCreditsChip: View {
         }
         .accessibilityLabel(creditsHelpText)
         .onHover { hovering in
+            walletHover.isOverTrigger = hovering
             balanceHoverTask?.cancel()
             // Empty state: the chip is a direct "Add credits" CTA (click opens
             // the top-up sheet), so no hover preview — surfacing the wallet
@@ -8792,6 +8803,7 @@ private struct FloatingCreditsChip: View {
             alignment: .trailing,
             constrainToWindow: true,
             takesFocus: walletPanelPinned,
+            shadowPadding: WalletCardStyle.shadowPadding,
             accessibilityLabel: L("Credits")
         ) {
             WalletPopover(
@@ -8808,20 +8820,27 @@ private struct FloatingCreditsChip: View {
                 },
                 onHeightChange: { walletPanelHeight = $0 }
             )
-            // Keep the panel alive while the cursor is over it, so the user
-            // can travel from the chip and click Add credits / View all.
+            // The native drawing window includes the shadow, which overlaps
+            // the source pill. Include that transparent margin in hover only,
+            // or opening the preview can steal hover and immediately dismiss it.
+            // Undo the padding after tracking so card layout/measurement stay put.
+            .padding(WalletCardStyle.shadowPadding)
+            .contentShape(Rectangle())
             .onHover { hovering in
+                walletHover.isOverPanel = hovering
                 if hovering {
                     walletDismissTask?.cancel()
                 } else if !walletPanelPinned {
                     scheduleWalletDismiss()
                 }
             }
+            .padding(-WalletCardStyle.shadowPadding)
         }
         .onChange(of: showWalletPanel) { _, isShown in
             // Outside-click dismissal flips the binding directly; unpin so the
             // next hover preview behaves normally.
             if !isShown {
+                walletHover.isOverPanel = false
                 walletPanelPinned = false
                 walletPanelHeight = 0
                 balanceHoverTask?.cancel()
@@ -8903,9 +8922,12 @@ private struct FloatingCreditsChip: View {
     private func scheduleWalletDismiss() {
         balanceHoverTask?.cancel()
         walletDismissTask?.cancel()
+        guard walletHover.shouldDismiss(isPinned: walletPanelPinned) else { return }
         walletDismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled,
+                walletHover.shouldDismiss(isPinned: walletPanelPinned)
+            else { return }
             showWalletPanel = false
         }
     }

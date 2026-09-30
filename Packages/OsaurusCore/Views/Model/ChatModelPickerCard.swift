@@ -188,6 +188,7 @@ struct ChatModelPickerCard: View {
         }
         .font(theme.font(size: CGFloat(theme.bodySize)))
         .foregroundStyle(theme.primaryText)
+        .contentShape(Rectangle())
         .onAppear {
             keyboardNavigation = NSApp.currentEvent?.type == .keyDown
             reportSize()
@@ -351,8 +352,7 @@ struct ChatModelPickerCard: View {
                                             .frame(width: 28, height: ChatPickerLayout.rowHeight)
                                             .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
-                                    .pointingHandCursor()
+                                    .buttonStyle(ModelFavoriteButtonStyle())
                                     .focusable()
                                     .focusEffectDisabled()
                                     .focused($focus, equals: "favorite:\(model.id)")
@@ -533,7 +533,6 @@ private struct ChatPickerTextLink: View {
             }
         }
         .buttonStyle(.plain)
-        .pointingHandCursor()
         .focusable()
         .focusEffectDisabled()
         .onHover { hovered = $0 }
@@ -595,7 +594,6 @@ private struct ChatPickerRow<Icon: View>: View {
             }
         }
         .buttonStyle(.plain)
-        .pointingHandCursor()
         .focusable()
         .focusEffectDisabled()
         .onHover { hovered = $0 }
@@ -615,7 +613,6 @@ private struct ChatModelOptionsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Button(action: onBack) { Label(L("Back to models"), systemImage: "chevron.backward") }
-                .pointingHandCursor()
                 .focused($backFocused)
             Text("Model options", bundle: .module).font(theme.font(size: 16, weight: .medium))
             ScrollView {
@@ -629,7 +626,6 @@ private struct ChatModelOptionsPanel: View {
                             Text("On", bundle: .module).tag("on")
                             Text("Off", bundle: .module).tag("off")
                         }
-                        .pointingHandCursor()
                     }
                     ForEach(control.options) { option in
                         VStack(alignment: .leading, spacing: 6) {
@@ -642,16 +638,13 @@ private struct ChatModelOptionsPanel: View {
                                     Text("Default", bundle: .module).tag("__default")
                                     ForEach(segments) { Text($0.label).tag($0.id) }
                                 }
-                                .pointingHandCursor()
                             case .toggle:
                                 Toggle(option.label, isOn: Binding(
                                     get: { control.effectiveToggleValue(for: option) },
                                     set: { control.onChange(option.id, .bool($0)) }
                                 ))
-                                .pointingHandCursor()
                                 if control.values[option.id] != nil {
                                     Button(L("Reset to default")) { control.onChange(option.id, nil) }
-                                        .pointingHandCursor()
                                 }
                             }
                             if let help = option.help {

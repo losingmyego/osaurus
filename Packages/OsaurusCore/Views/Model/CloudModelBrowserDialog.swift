@@ -3,10 +3,18 @@
 //  osaurus
 //
 //  The live Osaurus Cloud catalog. Favorites use the same store as the
-//  compact chat picker; choosing a model does not dismiss this dialog.
+//  compact chat picker; choosing a model dismisses this dialog.
 //
 
+import AppKit
 import SwiftUI
+
+private enum CloudBrowserFocus: Hashable {
+    case close
+    case search
+    case model(String)
+    case favorite(String)
+}
 
 struct CloudModelBrowserDialog: View {
     let options: [ModelPickerItem]
@@ -18,12 +26,12 @@ struct CloudModelBrowserDialog: View {
     @ObservedObject private var providerManager = RemoteProviderManager.shared
     @ObservedObject private var favoritesStore = FavoriteModelsStore.shared
     @State private var searchText = ""
-    @State private var sortOrder: ModelPickerSortOrder = .default
     @State private var contextFilter: ModelPickerContextFilter = .any
-    @State private var visionFilter: ModelPickerVisionFilter = .any
+    @State private var categoryFilter: CloudModelCategory = .all
     @State private var isRefreshing = false
     @State private var refreshFailed = false
-    @FocusState private var isSearchFocused: Bool
+    @State private var keyboardNavigation = false
+    @FocusState private var focusedControl: CloudBrowserFocus?
 
     private var providerState: RemoteProviderState? {
         providerManager.providerStates[RemoteProviderManager.osaurusRouterProviderId]
@@ -37,24 +45,21 @@ struct CloudModelBrowserDialog: View {
         .sorted { $0.displayName < $1.displayName }
     }
 
-    private var results: [ModelPickerItem] {
-        catalog
+    var body: some View {
+        // Derive one snapshot per dialog update, not once per consumer.
+        // Row hover is owned by the leaf row and never invalidates this work.
+        let catalog = catalog
+        let categories = CloudModelCategory.available(in: catalog)
+        let results = catalog
             .filter { $0.matches(searchQuery: searchText) }
             .filteredByContext(contextFilter)
-            .filteredByVision(visionFilter)
-            .sortedByPrice(sortOrder)
-    }
+            .filter(categoryFilter.includes)
+        let canBrowse = providerManager.isOsaurusRouterEnabled && !providerManager.isOffline && !catalog.isEmpty
 
-    private var canBrowse: Bool {
-        providerManager.isOsaurusRouterEnabled && !providerManager.isOffline && !catalog.isEmpty
-    }
-
-    var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             if canBrowse {
-                searchAndFilters
+                searchAndFilters(categories: categories)
                 if refreshFailed {
                     Text("Couldn't refresh. Showing the last available catalog.", bundle: .module)
                         .font(theme.font(size: CGFloat(theme.captionSize)))
@@ -68,24 +73,35 @@ struct CloudModelBrowserDialog: View {
                 if results.isEmpty {
                     searchEmptyState
                 } else {
-                    modelList
+                    modelList(results: results)
                 }
             } else {
                 catalogStatus
             }
             Divider()
-            footer
+            footer(canBrowse: canBrowse, resultCount: results.count)
         }
         .frame(minWidth: 540, idealWidth: 640, maxWidth: 760, minHeight: 440, idealHeight: 600, maxHeight: 720)
         .background(theme.primaryBackground)
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .onExitCommand(perform: onDismiss)
-        .task {
-            isSearchFocused = canBrowse
-            await refreshCatalog()
+        // Start in the dialog chrome instead of automatically editing search.
+        .defaultFocus($focusedControl, .close, priority: .userInitiated)
+        .onAppear {
+            keyboardNavigation = NSApp.currentEvent?.type == .keyDown
         }
-        .onChange(of: canBrowse) { _, ready in
-            if ready { isSearchFocused = true }
+        .onKeyPress(phases: .down) { _ in
+            keyboardNavigation = true
+            return .ignored
+        }
+        .task {
+            // Opening the compact picker already refreshes connected providers
+            // and publishes its catalog. Do not repeat that work during this
+            // sheet's entrance; fetch here only when there is nothing to show.
+            if catalog.isEmpty { await refreshCatalog() }
+        }
+        .onChange(of: categories) { _, available in
+            if !available.contains(categoryFilter) { categoryFilter = .all }
         }
     }
 
@@ -98,38 +114,41 @@ struct CloudModelBrowserDialog: View {
                     .accessibilityAddTraits(.isHeader)
                 Text("Select a model to use it now. Star it to keep it in your list.", bundle: .module)
                     .font(theme.font(size: CGFloat(theme.captionSize)))
-                    .foregroundStyle(theme.secondaryText)
+                    .foregroundStyle(theme.tertiaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Button(action: onDismiss) {
-                Text("Close", bundle: .module)
+                Image(systemName: "xmark")
+                    .font(theme.font(size: CGFloat(theme.captionSize), weight: .semibold))
+                    .frame(width: 32, height: 32)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(CloudCloseButtonStyle())
+            .accessibilityLabel(Text("Close", bundle: .module))
+            .help(L("Close"))
+            .focusable()
+            .focused($focusedControl, equals: .close)
+            .focusEffectDisabled(!keyboardNavigation)
             .keyboardShortcut(.cancelAction)
         }
         .padding(20)
     }
 
-    private var searchAndFilters: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text("Search", bundle: .module)
-                    .font(theme.font(size: CGFloat(theme.captionSize), weight: .medium))
-                    .foregroundStyle(theme.secondaryText)
-                TextField(L("Model name or provider"), text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(theme.font(size: CGFloat(theme.bodySize)))
-                    .accessibilityLabel(Text("Search Cloud models", bundle: .module))
-                    .focused($isSearchFocused)
-            }
+    private func searchAndFilters(categories: [CloudModelCategory]) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            TextField(L("Search model name or provider"), text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
+                .font(theme.font(size: CGFloat(theme.bodySize)))
+                .accessibilityLabel(Text("Search model name or provider", bundle: .module))
+                .focused($focusedControl, equals: .search)
             HStack(spacing: 16) {
-                Picker(selection: $sortOrder) {
-                    Text("Default", bundle: .module).tag(ModelPickerSortOrder.default)
-                    Text("Cheapest first", bundle: .module).tag(ModelPickerSortOrder.priceLowToHigh)
-                    Text("Highest price first", bundle: .module).tag(ModelPickerSortOrder.priceHighToLow)
+                Picker(selection: $categoryFilter) {
+                    ForEach(categories) { category in
+                        Text(LocalizedStringKey(category.label), bundle: .module).tag(category)
+                    }
                 } label: {
-                    Text("Price", bundle: .module)
+                    Text("Category", bundle: .module)
                 }
                 Picker(selection: $contextFilter) {
                     ForEach(ModelPickerContextFilter.allCases) { filter in
@@ -138,132 +157,65 @@ struct CloudModelBrowserDialog: View {
                 } label: {
                     Text("Context", bundle: .module)
                 }
-                Picker(selection: $visionFilter) {
-                    ForEach(ModelPickerVisionFilter.allCases) { filter in
-                        Text(LocalizedStringKey(filter.label), bundle: .module).tag(filter)
-                    }
-                } label: {
-                    Text("Vision", bundle: .module)
-                }
             }
             .pickerStyle(.menu)
             .font(theme.font(size: CGFloat(theme.captionSize)))
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
     }
 
-    private var modelList: some View {
-        List(selection: $selectedModel) {
-            ForEach(results) { model in
-                modelRow(model)
-                    .tag(model.id)
-            }
-        }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
-        .accessibilityLabel(Text("Cloud models", bundle: .module))
-    }
-
-    private func modelRow(_ model: ModelPickerItem) -> some View {
-        let isFavorite = favoritesStore.isFavorite(model.favoriteKey)
-        let favoriteActionLabel =
-            isFavorite
-            ? Text("Remove \(model.displayName) from favorites", bundle: .module)
-            : Text("Add \(model.displayName) to favorites", bundle: .module)
-        return HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "checkmark")
-                .font(theme.font(size: CGFloat(theme.captionSize), weight: .semibold))
-                .frame(width: 16)
-                .opacity(selectedModel == model.id ? 1 : 0)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(model.displayName)
-                        .font(theme.font(size: CGFloat(theme.bodySize), weight: .medium))
-                        .lineLimit(1)
-                    if let media = model.mediaModel {
-                        mediaKindLabel(media.kind)
-                            .font(theme.font(size: CGFloat(theme.captionSize)))
-                    } else if model.isVLM {
-                        Label {
-                            Text("Vision", bundle: .module)
-                        } icon: {
-                            Image(systemName: "eye")
-                        }
-                        .font(theme.font(size: CGFloat(theme.captionSize)))
-                    }
-                }
-                if let description = modelDetails(model), !description.isEmpty {
-                    Text(description)
-                        .font(theme.font(size: CGFloat(theme.captionSize)))
-                        .lineLimit(2)
-                }
-                if let metadata = modelMetadata(model) {
-                    Text(metadata)
-                        .font(theme.font(size: CGFloat(theme.captionSize)))
-                        .lineLimit(2)
+    private func modelList(results: [ModelPickerItem]) -> some View {
+        ScrollViewReader { proxy in
+            // Selection is an explicit button action. Native List selection would
+            // paint an accent background and conflate arrow navigation with activation.
+            List {
+                ForEach(results) { model in
+                    CloudModelBrowserRow(
+                        model: model,
+                        isSelected: selectedModel == model.id,
+                        isFavorite: favoritesStore.isFavorite(model.favoriteKey),
+                        keyboardNavigation: keyboardNavigation,
+                        focusedControl: $focusedControl,
+                        onSelect: { selectModel(model) },
+                        onToggleFavorite: { favoritesStore.toggle(model.favoriteKey) }
+                    )
+                    // ForEach supplies stable identity for scrolling. An extra .id
+                    // forces List to resolve every row up front on macOS.
+                    .listRowBackground(Color.clear)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Let native List selection supply its contrasting label colors.
-            .help([model.displayName, modelDetails(model), modelMetadata(model), model.id].compactMap { $0 }.joined(separator: "\n"))
-            Button {
-                favoritesStore.toggle(model.favoriteKey)
-            } label: {
-                Image(systemName: isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .accessibilityLabel(Text("Cloud models", bundle: .module))
+            .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+                moveModelFocus(by: press.key == .downArrow ? 1 : -1, results: results, proxy: proxy)
             }
-            .buttonStyle(.borderless)
-            .focusable()
-            .accessibilityLabel(favoriteActionLabel)
-            .accessibilityValue(isFavorite ? L("Saved") : L("Not saved"))
-            .help(isFavorite ? L("Remove from favorites") : L("Add to favorites"))
-        }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(model.displayName)
-        .accessibilityAction(named: favoriteActionLabel) {
-            favoritesStore.toggle(model.favoriteKey)
         }
     }
 
-    @ViewBuilder
-    private func mediaKindLabel(_ kind: MediaGenerationKind) -> some View {
-        switch kind {
-        case .image:
-            Label { Text("Image", bundle: .module) } icon: { Image(systemName: "photo") }
-        case .textToVideo:
-            Label { Text("Text → Video", bundle: .module) } icon: { Image(systemName: "film") }
-        case .imageToVideo:
-            Label { Text("Image → Video", bundle: .module) } icon: { Image(systemName: "photo.on.rectangle") }
-        }
+    private func selectModel(_ model: ModelPickerItem) {
+        selectedModel = model.id
+        onDismiss()
     }
 
-    private func modelDetails(_ model: ModelPickerItem) -> String? {
-        if let media = model.mediaModel {
-            return ModelPickerView.mediaDetails(media)
+    private func moveModelFocus(by offset: Int, results: [ModelPickerItem], proxy: ScrollViewProxy) -> KeyPress.Result {
+        let currentID: String
+        switch focusedControl {
+        case .model(let id), .favorite(let id): currentID = id
+        default: return .ignored
         }
-        // Router descriptions already include provider, input/output pricing,
-        // and context. Preserve those server-provided values verbatim.
-        if let description = model.description, !description.isEmpty { return description }
-        return model.contextLength.flatMap(OsaurusRouterModel.formatContextLength).map { "\($0) ctx" }
-    }
-
-    private func modelMetadata(_ model: ModelPickerItem) -> String? {
-        var parts = [model.parameterCount, model.quantization].compactMap { $0 }
-        if let media = model.mediaModel {
-            if let privacy = media.privacy, !privacy.isEmpty {
-                parts.append(ModelPickerView.mediaPrivacyLabel(privacy))
-            }
-            if let minimum = media.pricing?.minimumUSD {
-                let price = OsaurusRouter.formatUSDAsCredits(minimum)
-                parts.append(String(localized: "From \(price)", bundle: .module))
-            }
+        guard let index = results.firstIndex(where: { $0.id == currentID }) else { return .ignored }
+        let nextIndex = min(max(index + offset, 0), results.count - 1)
+        let nextID = results[nextIndex].id
+        keyboardNavigation = true
+        proxy.scrollTo(nextID)
+        // A newly revealed List row must exist before receiving keyboard focus.
+        DispatchQueue.main.async {
+            focusedControl = .model(nextID)
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return .handled
     }
 
     private var searchEmptyState: some View {
@@ -276,8 +228,8 @@ struct CloudModelBrowserDialog: View {
             Button {
                 searchText = ""
                 contextFilter = .any
-                visionFilter = .any
-                isSearchFocused = true
+                categoryFilter = .all
+                focusedControl = .search
             } label: {
                 Text("Clear search and filters", bundle: .module)
             }
@@ -334,35 +286,28 @@ struct CloudModelBrowserDialog: View {
         .buttonStyle(.bordered)
     }
 
-    private var footer: some View {
+    private func footer(canBrowse: Bool, resultCount: Int) -> some View {
         HStack(spacing: 16) {
             Button(action: onManageCloud) {
-                Text("Manage Cloud in Credits", bundle: .module)
+                Text("Manage Credits", bundle: .module)
+                    .font(theme.font(size: CGFloat(theme.captionSize)))
+                    .foregroundStyle(theme.secondaryText)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(CloudSecondaryButtonStyle())
+            .controlSize(.small)
+            .focusable()
             Spacer()
             if canBrowse {
                 Group {
-                    if results.count == 1 {
+                    if resultCount == 1 {
                         Text("1 model", bundle: .module)
                     } else {
-                        Text("\(results.count) models", bundle: .module)
+                        Text("\(resultCount) models", bundle: .module)
                     }
                 }
                 .font(theme.font(size: CGFloat(theme.captionSize)))
                 .foregroundStyle(theme.secondaryText)
                 .monospacedDigit()
-                Button {
-                    Task { await refreshCatalog() }
-                } label: {
-                    Label {
-                        Text("Refresh", bundle: .module)
-                    } icon: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isRefreshing)
             }
         }
         .padding(.horizontal, 20)
@@ -386,5 +331,165 @@ struct CloudModelBrowserDialog: View {
             refreshFailed = providerState?.isConnected != true
         }
         await ModelPickerItemCache.shared.buildModelPickerItems()
+    }
+}
+
+/// Keeps pointer movement local to the visible row, so scrolling through the
+/// catalog does not rerun the dialog's filters or reconstruct sibling rows.
+private struct CloudModelBrowserRow: View {
+    let model: ModelPickerItem
+    let isSelected: Bool
+    let isFavorite: Bool
+    let keyboardNavigation: Bool
+    var focusedControl: FocusState<CloudBrowserFocus?>.Binding
+    let onSelect: () -> Void
+    let onToggleFavorite: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var isHovered = false
+
+    var body: some View {
+        let favoriteActionLabel =
+            isFavorite
+            ? Text("Remove \(model.displayName) from favorites", bundle: .module)
+            : Text("Add \(model.displayName) to favorites", bundle: .module)
+        return HStack(alignment: .center, spacing: 0) {
+            Button {
+                onSelect()
+            } label: {
+                modelRowLabel(model, isSelected: isSelected)
+                    // Include the breathing room in the model's click target.
+                    .padding(.trailing, 12)
+                    .padding(.top, 12)
+                    .padding(.bottom, 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable()
+            .focused(focusedControl, equals: .model(model.id))
+            .focusEffectDisabled(!keyboardNavigation)
+            .onKeyPress(keys: [.return, .space]) { _ in
+                onSelect()
+                return .handled
+            }
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            Button {
+                onToggleFavorite()
+            } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isFavorite ? theme.accentColor : theme.secondaryText)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ModelFavoriteButtonStyle())
+            .focusable()
+            .focused(focusedControl, equals: .favorite(model.id))
+            .focusEffectDisabled(!keyboardNavigation)
+            .onKeyPress(keys: [.return, .space]) { _ in
+                onToggleFavorite()
+                return .handled
+            }
+            .accessibilityLabel(favoriteActionLabel)
+            .accessibilityValue(isFavorite ? L("Saved") : L("Not saved"))
+            .help(isFavorite ? L("Remove from favorites") : L("Add to favorites"))
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(theme.primaryText.opacity(isSelected || isHovered ? 0.04 : 0))
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        // Keep separators at the row edge instead of an inner media or vision Label.
+        .alignmentGuide(.listRowSeparatorLeading) { dimensions in
+            dimensions[.leading]
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.displayName)
+        .accessibilityAction(named: favoriteActionLabel) {
+            onToggleFavorite()
+        }
+    }
+
+    private func modelRowLabel(_ model: ModelPickerItem, isSelected: Bool) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "checkmark")
+                .font(theme.font(size: CGFloat(theme.captionSize), weight: .semibold))
+                .frame(width: 16)
+                .opacity(isSelected ? 1 : 0)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(model.displayName)
+                        .font(theme.font(size: CGFloat(theme.bodySize), weight: .medium))
+                        .lineLimit(1)
+                    if let category = CloudModelCategory.displayCategory(for: model) {
+                        CloudCategoryTag(category: category)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                if let price = modelPrice(model) {
+                    Text(price)
+                        .font(theme.font(size: CGFloat(theme.captionSize)))
+                        .foregroundStyle(theme.tertiaryText)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(model.displayName)
+        }
+        .foregroundStyle(theme.primaryText)
+    }
+
+    private func modelPrice(_ model: ModelPickerItem) -> String? {
+        guard let minimum = model.mediaModel?.pricing?.minimumUSD,
+            minimum.isFinite, minimum >= 0
+        else { return nil }
+        let price = OsaurusRouter.formatUSDAsCredits(minimum)
+        return String(localized: "From \(price)", bundle: .module)
+    }
+
+}
+
+/// Matches the chat attachment button's circular hover treatment. Keeping hover
+/// inside the style avoids rebuilding the Cloud catalog when Close is hovered.
+private struct CloudCloseButtonStyle: ButtonStyle {
+    @Environment(\.theme) private var theme
+    @State private var isHovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isHovered ? theme.accentColor : theme.secondaryText)
+            .background {
+                ZStack {
+                    Circle()
+                        .fill(theme.tertiaryBackground.opacity(isHovered ? 0.95 : 0.8))
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [theme.accentColor.opacity(0.1), .clear],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .opacity(isHovered ? 1 : 0)
+                }
+            }
+            .overlay {
+                Circle()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                theme.glassEdgeLight.opacity(isHovered ? 0.25 : 0.15),
+                                theme.primaryBorder.opacity(isHovered ? 0.2 : 0.1),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.5
+                    )
+            }
+            .contentShape(Circle())
+            .onHover { isHovered = $0 }
     }
 }

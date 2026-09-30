@@ -14,12 +14,14 @@ extension View {
     /// has more room there. Content receives the actual screen-constrained
     /// size and owns its surface, border and corner treatment. A zero height
     /// lets content report its measured size before the card first appears.
+    /// Shadow padding extends only the transparent drawing surface, not layout.
     func anchoredCard<Card: View>(
         isPresented: Binding<Bool>,
         size: CGSize,
         alignment: HorizontalAlignment = .leading,
         constrainToWindow: Bool = false,
         takesFocus: Bool = true,
+        shadowPadding: CGFloat = 0,
         accessibilityLabel: String = "Options",
         @ViewBuilder content: () -> Card
     ) -> some View {
@@ -30,10 +32,23 @@ extension View {
                 alignment: alignment,
                 constrainToWindow: constrainToWindow,
                 takesFocus: takesFocus,
+                shadowPadding: shadowPadding,
                 accessibilityLabel: accessibilityLabel,
                 content: content()
             )
         )
+    }
+}
+
+/// A preview stays open while either side of the trigger-to-panel handoff
+/// is hovered. Check this again when a delayed dismissal fires: hover callbacks
+/// from separate windows can arrive in either order.
+struct HoverPreviewPresence {
+    var isOverTrigger = false
+    var isOverPanel = false
+
+    func shouldDismiss(isPinned: Bool) -> Bool {
+        !isPinned && !isOverTrigger && !isOverPanel
     }
 }
 
@@ -75,8 +90,9 @@ enum AnchoredCardPlacement {
     }
 }
 
-/// The native window and its SwiftUI content share one presentation size.
-/// Content can clip a retiring column without maintaining a second animation.
+/// The visible card and its SwiftUI content share one presentation size.
+/// Transparent shadow padding is excluded from these layout metrics. Content
+/// can clip a retiring column without maintaining a second animation.
 struct AnchoredCardMetrics: Equatable {
     var visibleSize: CGSize
     var targetSize: CGSize
@@ -99,16 +115,19 @@ extension EnvironmentValues {
 private final class AnchoredCardPresentation: ObservableObject {
     var content: (AnchoredCardMetrics) -> AnyView
     var metrics: AnchoredCardMetrics
+    var shadowPadding: CGFloat
 
-    init(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics) {
+    init(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics, shadowPadding: CGFloat) {
         self.content = content
         self.metrics = metrics
+        self.shadowPadding = shadowPadding
     }
 
-    func update(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics) {
+    func update(content: @escaping (AnchoredCardMetrics) -> AnyView, metrics: AnchoredCardMetrics, shadowPadding: CGFloat) {
         objectWillChange.send()
         self.content = content
         self.metrics = metrics
+        self.shadowPadding = shadowPadding
     }
 }
 
@@ -117,7 +136,10 @@ private struct AnchoredCardRoot: View {
 
     var body: some View {
         presentation.content(presentation.metrics)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: presentation.metrics.visibleSize.width, height: presentation.metrics.visibleSize.height)
+            // The card's layout and anchor use its visible bounds. Only the
+            // transparent native drawing surface grows to contain the shadow.
+            .padding(presentation.shadowPadding)
             .transaction {
                 // The native viewport is the only animation clock. Letting
                 // SwiftUI animate layout again would lag behind the surface.
@@ -133,6 +155,7 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
     let alignment: HorizontalAlignment
     let constrainToWindow: Bool
     let takesFocus: Bool
+    let shadowPadding: CGFloat
     let accessibilityLabel: String
     let content: Card
 
@@ -161,6 +184,7 @@ private struct AnchoredCardAnchor<Card: View>: NSViewRepresentable {
         coordinator.trailingAligned = alignment == .trailing
         coordinator.constrainToWindow = constrainToWindow
         coordinator.takesFocus = takesFocus
+        coordinator.shadowPadding = max(0, shadowPadding)
         coordinator.content = { metrics in
             AnyView(content
                 .environment(\.anchoredCardMetrics, metrics)
@@ -193,6 +217,7 @@ private final class AnchoredCardCoordinator {
     var trailingAligned = false
     var constrainToWindow = false
     var takesFocus = true
+    var shadowPadding: CGFloat = 0
     var content: (AnchoredCardMetrics) -> AnyView = { _ in AnyView(EmptyView()) }
 
     private weak var parent: NSWindow?
@@ -209,7 +234,12 @@ private final class AnchoredCardCoordinator {
     private var observers: [NSObjectProtocol] = []
     private var eventMonitor: Any?
     private var updateScheduled = false
+    /// Visible card bounds, excluding the transparent shadow margin.
     private var presentedFrame = NSRect.zero
+
+    private func windowFrame(for cardFrame: CGRect) -> CGRect {
+        cardFrame.insetBy(dx: -shadowPadding, dy: -shadowPadding)
+    }
 
     // NSViewRepresentable updates and layout callbacks may occur during a
     // SwiftUI render. Defer panel mutations and binding writes one turn.
@@ -267,8 +297,7 @@ private final class AnchoredCardCoordinator {
         }
         if presentedFrame == frame {
             stopResize()
-            updateContent(target: frame.size, isAnimating: false)
-            host?.layoutSubtreeIfNeeded()
+            applyFrame(frame, target: frame.size, isAnimating: false)
             showWhenReady()
             return
         }
@@ -330,19 +359,23 @@ private final class AnchoredCardCoordinator {
     private func applyFrame(_ frame: CGRect, target: CGSize, isAnimating: Bool) {
         guard let panel else { return }
         presentedFrame = frame
-        panel.setFrame(frame, display: false)
+        panel.setFrame(windowFrame(for: frame), display: false)
         updateContent(target: target, isAnimating: isAnimating)
         host?.layoutSubtreeIfNeeded()
         panel.displayIfNeeded()
     }
 
     private func updateContent(target: CGSize, isAnimating: Bool) {
-        presentation?.update(content: content, metrics: AnchoredCardMetrics(
-            visibleSize: presentedFrame.size,
-            targetSize: target,
-            availableSize: availableSize,
-            isAnimating: isAnimating
-        ))
+        presentation?.update(
+            content: content,
+            metrics: AnchoredCardMetrics(
+                visibleSize: presentedFrame.size,
+                targetSize: target,
+                availableSize: availableSize,
+                isAnimating: isAnimating
+            ),
+            shadowPadding: shadowPadding
+        )
     }
 
     private func stopResize() {
@@ -379,8 +412,9 @@ private final class AnchoredCardCoordinator {
     private func present(in parent: NSWindow, frame: NSRect) {
         self.parent = parent
         previousResponder = parent.firstResponder
+        let drawingFrame = windowFrame(for: frame)
         let panel = AnchoredCardPanel(
-            contentRect: frame,
+            contentRect: drawingFrame,
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -407,12 +441,13 @@ private final class AnchoredCardCoordinator {
             metrics: AnchoredCardMetrics(
                 visibleSize: frame.size, targetSize: frame.size,
                 availableSize: availableSize, isAnimating: false
-            )
+            ),
+            shadowPadding: shadowPadding
         )
         let host = NSHostingView(rootView: AnchoredCardRoot(presentation: presentation))
         self.presentation = presentation
         host.sizingOptions = []
-        host.frame = NSRect(origin: .zero, size: frame.size)
+        host.frame = NSRect(origin: .zero, size: drawingFrame.size)
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
         self.panel = panel
@@ -491,6 +526,31 @@ private final class AnchoredCardCoordinator {
                 return nil
             }
             return event
+        }
+        if event.window === panel {
+            let screenPoint = panel.convertPoint(toScreen: event.locationInWindow)
+            if !presentedFrame.contains(screenPoint) {
+                // Drawing space is not part of the menu. Route clicks through
+                // to chat, including the source chip underneath the shadow.
+                if let parent, parent.frame.contains(screenPoint),
+                    let forwarded = NSEvent.mouseEvent(
+                        with: event.type,
+                        location: parent.convertPoint(fromScreen: screenPoint),
+                        modifierFlags: event.modifierFlags,
+                        timestamp: event.timestamp,
+                        windowNumber: parent.windowNumber,
+                        context: nil,
+                        eventNumber: event.eventNumber,
+                        clickCount: event.clickCount,
+                        pressure: event.pressure
+                    )
+                {
+                    NSApp.postEvent(forwarded, atStart: true)
+                } else {
+                    dismiss(restoreFocus: true)
+                }
+                return nil
+            }
         }
         guard !belongsToCard(event.window) else { return event }
         if let anchor, let parent, event.window === parent {

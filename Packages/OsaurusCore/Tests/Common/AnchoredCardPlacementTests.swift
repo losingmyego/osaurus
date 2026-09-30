@@ -219,3 +219,30 @@ struct AnchoredCardPlacementTests {
         #expect(result.height > 0)
     }
 }
+
+
+struct HoverPreviewPresenceTests {
+    @Test func panelEntryBeforeTriggerExitDoesNotDismiss() {
+        var hover = HoverPreviewPresence(isOverTrigger: true)
+        hover.isOverPanel = true
+        hover.isOverTrigger = false
+        #expect(!hover.shouldDismiss(isPinned: false))
+    }
+
+    @Test func triggerEntryBeforePanelExitDoesNotDismiss() {
+        var hover = HoverPreviewPresence(isOverPanel: true)
+        hover.isOverTrigger = true
+        hover.isOverPanel = false
+        #expect(!hover.shouldDismiss(isPinned: false))
+    }
+
+    @Test func delayedDismissalRechecksHoverAndPinState() {
+        var hover = HoverPreviewPresence()
+        #expect(hover.shouldDismiss(isPinned: false))
+        hover.isOverPanel = true
+        #expect(!hover.shouldDismiss(isPinned: false))
+        hover.isOverPanel = false
+        #expect(!hover.shouldDismiss(isPinned: true))
+        #expect(hover.shouldDismiss(isPinned: false))
+    }
+}

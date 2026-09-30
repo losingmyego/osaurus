@@ -216,6 +216,7 @@ private enum ChatModelPickerPreviewData {
 
 }
 
+#if DEBUG && canImport(PreviewsMacros)
 #Preview("1 · Local active, Cloud inactive") {
     ChatModelPickerPreview(.localActive)
 }
@@ -239,4 +240,6 @@ private enum ChatModelPickerPreviewData {
 #Preview("6 · Light appearance") {
     ChatModelPickerPreview(.cloudActive, light: true)
 }
+#endif
+
 #endif
